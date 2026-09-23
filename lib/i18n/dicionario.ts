@@ -870,6 +870,7 @@ export const DICIONARIO: Traducoes = {
   "Todas as tags": { es: "Todas las etiquetas" },
   "Apenas não lidos": { es: "Solo no leídos" },
   "Não lidos": { es: "No leídos" },
+  Grupo: { es: "Grupo" },
   Fila: { es: "Cola" },
   Minhas: { es: "Mías" },
   Todas: { es: "Todas" },
