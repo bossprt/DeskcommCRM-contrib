@@ -74,6 +74,16 @@ export function getRegisteredHandlers(): readonly EventHandler[] {
 }
 
 /**
+ * Só leitura, sem efeito — existe para o teste travar QUEM escuta um evento,
+ * com nome. Um consumidor futuro que passe a escutar `message.group_received`
+ * (ou qualquer outro evento sensível) reprova em `grupo-fora-de-listas.test.ts`
+ * em vez de vazar em silêncio para produção.
+ */
+export function handlersParaTeste(): readonly EventHandler[] {
+  return _handlers;
+}
+
+/**
  * Match handlers for a single event row, skipping any whose key already lives
  * in `consumed_by`. Returns the per-handler results so the cron driver can
  * decide how to update `consumed_by` / `status` / `attempts`.

@@ -514,7 +514,13 @@ const TELEFONE_DE_REMETENTE = /^\+\d{8,15}$/;
  * mensagem entra do mesmo jeito, e a tela mostra "Participante".
  */
 export function remetenteDoGrupo(p: WahaPayload): RemetenteDeGrupo | null {
-  const autor = primeiroTexto(p.participant, p.author, p._data?.key?.participant);
+  const autorBruto = primeiroTexto(p.participant, p.author, p._data?.key?.participant);
+  // Sufixo de DISPOSITIVO (`:4`, `:12`...) que o WhatsApp multi-device às vezes
+  // ancora antes do `@` — `123456:4@lid` e `5511999990000:12@s.whatsapp.net`
+  // são o MESMO lid/telefone de sempre, só que com o dispositivo colado. Sem
+  // remover, o teto de dígitos de `LID_DE_REMETENTE`/`TELEFONE_DE_REMETENTE`
+  // reprova os dois e o remetente do grupo se perde.
+  const autor = autorBruto ? autorBruto.replace(/:\d+@/, "@") : null;
   // Teto antes de qualquer varredura: é campo de fora, como o `from`.
   const id = autor && autor.length <= 128 ? parseChatId(autor) : null;
 

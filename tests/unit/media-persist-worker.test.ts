@@ -13,16 +13,22 @@ const messageRow = {
   metadata: { raw_type: "image" },
 };
 
+// Grupo nunca deriva (Task 8, controller A): a IA não serve grupos, e a
+// derivação (visão/transcrição paga) não pode ser pedida para eles.
+const conversationRow = { is_group: false };
+
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
-    // Duas consultas agora, e cada uma com um encadeamento diferente: a
-    // mensagem casa por `id` + `organization_id` (dois `eq`), a SESSÃO casa só
-    // por `id` (um `eq`). O dublê responde pela TABELA porque, sem isso, a
+    // Três consultas agora, cada uma com um encadeamento diferente: a mensagem
+    // casa por `id` + `organization_id` (dois `eq`), a SESSÃO casa só por `id`
+    // (um `eq`), a CONVERSA casa por `id` + `organization_id` (dois `eq`,
+    // igual à mensagem). O dublê responde pela TABELA porque, sem isso, a
     // consulta da sessão receberia a linha da mensagem — e o worker cairia em
     // "canal sem mídia" achando que a sessão não existe.
     from: (tabela: string) => ({
       select: () => {
-        const linha = tabela === "channel_sessions" ? sessionRow : messageRow;
+        const linha =
+          tabela === "channel_sessions" ? sessionRow : tabela === "conversations" ? conversationRow : messageRow;
         const resolvido = { maybeSingle: async () => ({ data: linha, error: null }) };
         return { eq: () => ({ ...resolvido, eq: () => resolvido }) };
       },
@@ -78,6 +84,7 @@ describe("persistMessageMedia", () => {
     updateEqMock.mockReset();
     rpcMock.mockReset().mockResolvedValue({ error: null });
     messageRow.media_storage_path = null;
+    conversationRow.is_group = false;
     vi.mocked(fetchWahaMedia).mockResolvedValue({
       buffer: Buffer.from([1, 2, 3]),
       mime: "image/jpeg",
@@ -102,6 +109,31 @@ describe("persistMessageMedia", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "emit_event",
       expect.objectContaining({ p_event_type: "media.derive_requested", p_entity_id: "msg1" }),
+    );
+  });
+
+  it("1:1 (controle): persiste E pede derivação", async () => {
+    conversationRow.is_group = false;
+    const result = await persistMessageMedia(eventRow());
+    expect(result.status).toBe("ok");
+    expect(uploadMock).toHaveBeenCalled();
+    expect(rpcMock).toHaveBeenCalledWith(
+      "emit_event",
+      expect.objectContaining({ p_event_type: "media.derive_requested", p_entity_id: "msg1" }),
+    );
+  });
+
+  it("grupo: persiste mas NÃO pede derivação (a IA não serve grupos)", async () => {
+    conversationRow.is_group = true;
+    const result = await persistMessageMedia(eventRow());
+    expect(result.status).toBe("ok");
+    expect(uploadMock).toHaveBeenCalled();
+    expect(updateEqMock).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ media_status: "stored" }) }),
+    );
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      "emit_event",
+      expect.objectContaining({ p_event_type: "media.derive_requested" }),
     );
   });
 

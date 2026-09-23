@@ -217,6 +217,24 @@ describe("remetenteDoGrupo — quem escreveu, tirado do autor e nunca do `from`"
     expect(remetenteDoGrupo({ from: GRUPO })).toBeNull();
   });
 
+  it("autor @lid com sufixo de dispositivo (:4) não perde o lid", () => {
+    expect(remetenteDoGrupo({ from: GRUPO, author: "123456:4@lid", _data: { pushName: "Zé" } })).toEqual({
+      name: "Zé",
+      phone: null,
+      lid: "123456",
+    });
+  });
+
+  it("autor telefone com sufixo de dispositivo (:12) não perde o número", () => {
+    expect(
+      remetenteDoGrupo({ from: GRUPO, author: "5511999990000:12@s.whatsapp.net", _data: { pushName: "Ana" } }),
+    ).toEqual({
+      name: "Ana",
+      phone: "+5511999990000",
+      lid: null,
+    });
+  });
+
   it("forma desconhecida não lança: campo de outro tipo, lixo e nome enorme viram o que dá para guardar", () => {
     const r = remetenteDoGrupo({
       from: GRUPO,
