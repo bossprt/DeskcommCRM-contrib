@@ -1,12 +1,13 @@
 import type { WahaClient } from "@/lib/waha/client";
+import type * as WahaClientModule from "@/lib/waha/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listarGrupos = vi.fn();
 const definirRecebimentoDeGrupos = vi.fn();
-vi.mock("@/lib/waha/client", async (orig) => {
-  const original = await orig();
+vi.mock("@/lib/waha/client", async () => {
+  const actual = await vi.importActual<typeof WahaClientModule>("@/lib/waha/client");
   return {
-    ...original,
+    ...actual,
     getWahaClient: () => ({ listarGrupos, definirRecebimentoDeGrupos } as Partial<WahaClient>),
   };
 });
