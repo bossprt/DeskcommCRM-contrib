@@ -809,6 +809,7 @@ git commit -m "feat(grupos): listar grupos e ligar recebimento pela porta do ada
 ```ts
 // lib/grupos/servico.test.ts
 import { describe, expect, it, vi } from "vitest";
+import { CHANNEL_PROVIDER_WAHA } from "@/lib/channels/capabilities";
 import { alternarGrupo, GrupoError, listarGruposDoNumero, type DepsDeGrupos } from "./servico";
 
 const ORG = "11111111-1111-4111-8111-111111111111";
@@ -820,7 +821,7 @@ function deps(opts: { ligados?: string[]; capability?: "full" | "none"; confirma
   for (const g of opts.ligados ?? []) linhas.set(g, { group_chat_id: g, subject: null, enabled: true, enabled_at: "2026-09-23T00:00:00.000Z" });
   const d: DepsDeGrupos & { setGroupIntake: ReturnType<typeof vi.fn>; audit: ReturnType<typeof vi.fn> } = {
     db: {
-      lerSessao: vi.fn(async () => ({ provider: "waha" as never, sessionRef: "s1", groupsCapability: opts.capability ?? "full" })),
+      lerSessao: vi.fn(async () => ({ provider: CHANNEL_PROVIDER_WAHA, sessionRef: "s1", groupsCapability: opts.capability ?? "full" })),
       listarLinhas: vi.fn(async () => [...linhas.values()]),
       contarLigados: vi.fn(async () => [...linhas.values()].filter((l) => l.enabled).length),
       gravarLinha: vi.fn(async (_o, _s, row) => { linhas.set(row.group_chat_id, row); return { id: "row-" + row.group_chat_id }; }),
