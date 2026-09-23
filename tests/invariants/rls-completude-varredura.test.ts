@@ -271,6 +271,14 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "`describe.each`. Guarda as UTMs de cada clique no botão da landing " +
       "page e o ref curto que as liga à mensagem do WhatsApp.",
   },
+  {
+    tabela: "channel_session_groups",
+    razao:
+      "tests/invariants/grupos-na-inbox.test.ts (\"isola por organização " +
+      "(RLS) e só gerente escreve\") — manager da organização de teste lê e " +
+      "escreve, agent é recusado na escrita (gate de papel), e a leitura por " +
+      "JWT devolve 0 linhas da outra organização. Migration 0388.",
+  },
 ];
 
 /**
