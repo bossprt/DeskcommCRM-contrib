@@ -4623,6 +4623,28 @@ export const DICIONARIO: Traducoes = {
   "indisponível enquanto o serviço do WhatsApp não estiver ativo": {
     es: "no disponible mientras el servicio de WhatsApp no esté activo",
   },
+  Grupos: { es: "Grupos" },
+  "Não consegui ler os grupos deste número.": {
+    es: "No pude leer los grupos de este número.",
+  },
+  "O WhatsApp não confirmou a mudança. Nada foi alterado; tente de novo.": {
+    es: "WhatsApp no confirmó el cambio. No se alteró nada; inténtalo de nuevo.",
+  },
+  "Grupos ligados aparecem no chat para os atendentes responderem. A IA nunca responde em grupo.": {
+    es: "Los grupos activados aparecen en el chat para que los agentes respondan. La IA nunca responde en un grupo.",
+  },
+  "Atualizar lista": { es: "Actualizar lista" },
+  "Ligar mesmo assim": { es: "Activar de todos modos" },
+  "Grupo sem nome": { es: "Grupo sin nombre" },
+  "O número saiu deste grupo. Desligue a chave se não precisar mais dela.": {
+    es: "El número salió de este grupo. Desactiva la llave si ya no la necesitas.",
+  },
+  "Este número não está em nenhum grupo.": {
+    es: "Este número no está en ningún grupo.",
+  },
+  "A partir de agora, o WhatsApp deste número passa a enviar mensagens de todos os grupos para o sistema. Só os grupos ligados aparecem no chat; os outros são descartados.": {
+    es: "A partir de ahora, el WhatsApp de este número empieza a enviar mensajes de todos los grupos al sistema. Solo los grupos activados aparecen en el chat; los demás se descartan.",
+  },
   "Este número não tem conversa, mensagem nem configuração ligada a ele.": {
     es: "Este número no tiene conversaciones, mensajes ni configuración asociados.",
   },
