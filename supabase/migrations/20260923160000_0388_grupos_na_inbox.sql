@@ -11,8 +11,14 @@ end $$;
 create index if not exists idx_contacts_org_kind on public.contacts (organization_id, kind) where kind <> 'person';
 
 -- 1b. Um contato de grupo por organização + grupo (dedup: duas ingestões concorrentes
--- do mesmo grupo não podem criar dois placeholders para a mesma conversa).
-create unique index if not exists uq_contacts_grupo on public.contacts (organization_id, (source_metadata->>'group_chat_id')) where kind = 'whatsapp_group';
+-- do mesmo grupo não podem criar dois placeholders para a mesma conversa). A ficha
+-- mesclada (`is_merged_into is not null`) sai da disputa, como os demais índices de
+-- identidade de `contacts` — senão o grupo perdedor de um merge segura o
+-- `group_chat_id` para sempre e a ingestão nunca cria (nem reencontra) o vencedor.
+-- `drop`+`create` (não só `if not exists`) porque um banco de dev pode já ter o
+-- índice na definição antiga sem a guarda, e recriar é o único jeito de curá-lo.
+drop index if exists uq_contacts_grupo;
+create unique index if not exists uq_contacts_grupo on public.contacts (organization_id, (source_metadata->>'group_chat_id')) where kind = 'whatsapp_group' and is_merged_into is null;
 
 -- 2. Os grupos de cada número, com a chave liga/desliga.
 create table if not exists public.channel_session_groups (

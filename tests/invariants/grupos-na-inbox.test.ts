@@ -149,4 +149,23 @@ describe("uq_contacts_grupo", () => {
       ),
     ).rejects.toThrow(/duplicate key|unique/i);
   });
+
+  it("ficha de grupo MESCLADA não segura o group_chat_id — um novo placeholder pode ocupá-lo", async () => {
+    const GRUPO_MESCLADO = "120363000000000077@g.us";
+    const perdedor = await q(
+      "insert into contacts(organization_id,name,display_name,kind,source,source_metadata) values($1,'Grupo Perdedor','Grupo Perdedor','whatsapp_group','whatsapp_group',jsonb_build_object('group_chat_id',$2::text)) returning id",
+      [org, GRUPO_MESCLADO],
+    );
+    // Junta a ficha perdedora a outra (qualquer contato vivo serve de vencedor
+    // para este teste — o que importa é que `is_merged_into` deixa de ser null).
+    await q("update contacts set is_merged_into=$1 where id=$2", [idsPreExistentes[0], perdedor.rows[0].id]);
+    // Sem `where is_merged_into is null` no índice, este INSERT estouraria
+    // "duplicate key" contra a ficha morta — que é exatamente o defeito que
+    // `tests/unit/indice-de-contato-ignora-ficha-mesclada.test.ts` fecha.
+    const vencedor = await q(
+      "insert into contacts(organization_id,name,display_name,kind,source,source_metadata) values($1,'Grupo Vencedor','Grupo Vencedor','whatsapp_group','whatsapp_group',jsonb_build_object('group_chat_id',$2::text)) returning id",
+      [org, GRUPO_MESCLADO],
+    );
+    expect(vencedor.rows[0].id).not.toEqual(perdedor.rows[0].id);
+  });
 });

@@ -82,6 +82,7 @@ function payload(patch: Partial<ExportPayload> = {}): ExportPayload {
     demandas: [],
     campaign_recipients: [],
     campaign_suppressions: [],
+    channel_session_groups: [],
   appointment_notices: [],
     ...patch,
   };

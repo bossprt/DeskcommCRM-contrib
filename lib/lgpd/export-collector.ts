@@ -122,6 +122,26 @@ export interface CheckpointRow {
 }
 
 /**
+ * Vínculo do titular com um grupo de WhatsApp (migration 0388).
+ *
+ * A FK `channel_session_groups.contact_id` só aponta para o CONTATO PLACEHOLDER
+ * do grupo (`contacts.kind = 'whatsapp_group'`), nunca para uma pessoa real — é
+ * por isso que a redação (`fn_lgpd_cascade_redact_contact`) nulifica `subject`
+ * comentando explicitamente que "nulificar não perde nada operacional: número,
+ * conversa e liga/desliga ficam". Este bloco espelha a mesma chave
+ * (`contact_id = p_contact_id`): quando o titular do pedido É o placeholder do
+ * grupo, o Art. 18 II entrega o mesmo `subject` que a anonimização apagaria.
+ */
+export interface ChannelSessionGroupRow {
+  id: string;
+  group_chat_id: string;
+  subject: string | null;
+  enabled: boolean;
+  enabled_at: string | null;
+  created_at: string;
+}
+
+/**
  * Compromisso da agenda do titular.
  *
  * As colunas são as MESMAS que a migration 0184 redige ao anonimizar — e não é
@@ -539,6 +559,13 @@ export interface ExportPayload {
    * se entrega a pedido dele (Art. 18 II).
    */
   campaign_suppressions: CampaignSuppressionRow[];
+  /**
+   * Grupos de WhatsApp vinculados ao titular (migration 0388) — ver o
+   * docstring de `ChannelSessionGroupRow`. Obrigatório, não opcional, pela
+   * mesma razão de `case_chat_messages`: campo obrigatório faz um caminho de
+   * export novo NÃO COMPILAR se esquecer.
+   */
+  channel_session_groups: ChannelSessionGroupRow[];
   reply_drafts?: Array<{
     id: string;
     status: string;
@@ -1080,6 +1107,30 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     }
   }
 
+  // Grupos de WhatsApp — `contact_id` direto em `channel_session_groups`
+  // (migration 0388). Ver o docstring de `ChannelSessionGroupRow`: a FK só
+  // aponta para o CONTATO PLACEHOLDER do grupo, então este bloco só devolve
+  // linha quando o titular do pedido é esse placeholder — o mesmo escopo que a
+  // redação usa (`fn_lgpd_cascade_redact_contact`, `contact_id = p_contact_id`).
+  let channel_session_groups: ChannelSessionGroupRow[] = [];
+  if (contactId) {
+    const { data, error } = await admin
+      .from("channel_session_groups")
+      .select("id, group_chat_id, subject, enabled, enabled_at, created_at")
+      .eq("organization_id", organizationId)
+      .eq("contact_id", contactId)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      logger.warn("[lgpd-export-worker] channel session groups load failed", {
+        request_id: requestId,
+        error: error.message,
+      });
+    } else if (data) {
+      channel_session_groups = data;
+    }
+  }
+
   // Captação por webhook — a MESMA classe do bloco acima, achada pelo gate.
   let webhook_captures: CaptureRow[] = [];
   if (contactId) {
@@ -1474,6 +1525,7 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     avisos_de_caso,
     campaign_recipients,
     campaign_suppressions,
+    channel_session_groups,
   };
 }
 
@@ -1518,5 +1570,6 @@ function emptyPayload(
     avisos_de_caso: [],
     campaign_recipients: [],
     campaign_suppressions: [],
+    channel_session_groups: [],
   };
 }
