@@ -53,6 +53,28 @@ grupos e responder por lá, manualmente. **A IA nunca responde em grupo.**
   e os webhooks de saída (`message.received` no editor de regras). **A lista completa sai
   de uma varredura no plano, não desta frase.**
 
+## Achados da leitura para o plano (ajuste aprovado em 23/09/2026)
+
+1. **Gatilhos do banco em `messages` e `conversations`.** Dos 11, dois reagem mal a grupo:
+   - `fn_request_channel_routing`, chamado por `trg_conversation_routing_requested` e
+     `trg_service_reopened_routing`, **atribuiria o grupo a um atendente sozinho**, e isso
+     quebra a saída 1. Passa a pular `is_group`.
+   - `fn_emit_message_event` emitiria `message.received`, e isso acionaria IA, follow-up,
+     campanhas, automações, webhooks e sentimento. Para conversa de grupo, ele passa a
+     emitir **`message.group_received`**. Os consumidores atuais não escutam esse evento,
+     então a proteção vale num ponto só, inclusive para consumidores futuros. Só
+     `lib/notifications/push.handler.ts` passa a escutá-lo.
+   - `fn_service_inbound` (demanda) já pula grupo. Trava de atendimento, revisão de
+     contexto, agenda e campanha são neutros.
+2. **O cliente do WAHA reverte o filtro.** `WahaClient.compatibleSession` trata
+   `ignore.groups = false` como sessão incompatível, e `convergirConfigDaSessao` regrava
+   `CONVERSAS_IGNORADAS`, com `groups: true`. Os dois passam a tratar a chave `groups`
+   como **propriedade desta funcionalidade**: aceitam os dois valores e a preservam. Só o
+   método novo, que liga e desliga grupos, escreve nela.
+3. `contacts.wa_identity` é gerada e só produz `phone:` e `lid:`, e `fn_upsert_wa_contact`
+   não serve para grupo. O contato do grupo é criado pelo serviço de grupos, e o id dele
+   fica em `channel_session_groups.contact_id`.
+
 ## Parte 1: dados
 
 Uma migration nova, com o `NNNN` escolhido na hora
