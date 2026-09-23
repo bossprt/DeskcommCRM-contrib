@@ -14,6 +14,7 @@ import type { AuditAction } from "@/lib/audit/actions";
 import { capabilitiesOf, getAdapter } from "@/lib/channels";
 import { resolveSessionRef, CHANNEL_SESSION_REF_COLUMNS, type ChannelSessionRef } from "@/lib/channels/session-ref";
 import type { ChannelGroup, ChannelProvider } from "@/lib/channels/types";
+import { logger } from "@/lib/logger";
 
 export class GrupoError extends Error {
   constructor(public readonly code: "sessao_nao_encontrada" | "canal_sem_grupos" | "filtro_nao_confirmado") {
@@ -32,6 +33,14 @@ export interface GrupoDoNumero {
   subject: string | null;
   enabled: boolean;
   enabledAt: string | null;
+  /**
+   * O WhatsApp devolveu este grupo agora? `false` = ligado no banco mas o
+   * número já saiu dele (ou o grupo sumiu) — um ÓRFÃO. Sem carregar isto na
+   * lista, o grupo desaparece da tela assim que `listGroups` para de
+   * devolvê-lo, e o botão "desligar" só existe para quem a tela mostra: o
+   * grupo fica preso ligado para sempre.
+   */
+  presente: boolean;
 }
 
 interface LinhaDeGrupo {
@@ -89,12 +98,45 @@ export async function listarGruposDoNumero(
     deps.db.listarLinhas(e.organizationId, e.channelSessionId),
   ]);
   const porId = new Map(gravados.map((l) => [l.group_chat_id, l]));
-  return doCanal.map((g) => {
+  const daLista = doCanal.map((g) => {
     const l = porId.get(g.chatId);
-    return { chatId: g.chatId, subject: g.subject ?? l?.subject ?? null, enabled: l?.enabled ?? false, enabledAt: l?.enabled_at ?? null };
+    porId.delete(g.chatId); // o que sobrar no Map depois disto é órfão.
+    return {
+      chatId: g.chatId,
+      subject: g.subject ?? l?.subject ?? null,
+      enabled: l?.enabled ?? false,
+      enabledAt: l?.enabled_at ?? null,
+      presente: true,
+    };
   });
+  // Órfãos: LIGADOS no banco, mas o WhatsApp não devolveu mais (o número saiu
+  // do grupo, ou o grupo deixou de existir). Uma linha desligada que sumiu não
+  // precisa aparecer — não há nada para desligar; uma linha LIGADA que sumiu
+  // precisa, senão ela nunca mais pode ser desligada pela tela.
+  const orfaos = [...porId.values()]
+    .filter((l) => l.enabled)
+    .map((l) => ({
+      chatId: l.group_chat_id,
+      subject: l.subject,
+      enabled: l.enabled,
+      enabledAt: l.enabled_at,
+      presente: false,
+    }));
+  return [...daLista, ...orfaos];
 }
 
+/**
+ * Race residual, aceito de propósito (ruling I2): dois gestores trocando o
+ * MESMO número ao mesmo tempo podem intercalar leitura e escrita sem que nada
+ * aqui sirva de trava — não há transação através do PostgREST (cada chamada é
+ * um request HTTP isolado), e forçar `setGroupIntake` em TODO enable/disable
+ * para fechar a janela reinicia a sessão do WhatsApp a cada clique, o que foi
+ * medido como pior que o risco: um clique duplo vira reconexão visível do
+ * canal para o dono da operação. A recontagem DEPOIS da escrita no caminho de
+ * DESLIGAR (abaixo) estreita a janela ao mínimo possível sem lock: mesmo que
+ * duas chamadas concorrentes leiam o mesmo estado "antes", cada uma decide o
+ * destino do FILTRO a partir da contagem já gravada, não da lida no início.
+ */
 export async function alternarGrupo(
   deps: DepsDeGrupos,
   e: {
@@ -109,14 +151,39 @@ export async function alternarGrupo(
 ): Promise<{ enabled: boolean }> {
   chatIdDeGrupo.parse(e.groupChatId);
   const s = await sessaoComGrupos(deps, e.organizationId, e.channelSessionId);
+
+  if (e.ligar) return ligarGrupo(deps, s, e);
+  return desligarGrupo(deps, s, e);
+}
+
+type SessaoComGrupos = Awaited<ReturnType<typeof sessaoComGrupos>>;
+interface AlternarInput {
+  organizationId: string;
+  channelSessionId: string;
+  groupChatId: string;
+  subject: string | null;
+  actorUserId: string;
+  requestId: string;
+}
+
+/**
+ * LIGAR: confirma o filtro ANTES de gravar — nunca fica "ligado" no banco sem
+ * estar ligado de verdade no WhatsApp (invariante do serviço).
+ *
+ * A contagem é lida ANTES da escrita e conta TODAS as linhas ligadas,
+ * inclusive o próprio alvo se ele já estivesse ligado — por isso, se o alvo
+ * já está ligado, a contagem nunca é zero (ele mesmo já soma 1) e o filtro
+ * não é tocado de novo: religar um grupo já ligado é no-op para o filtro.
+ */
+async function ligarGrupo(deps: DepsDeGrupos, s: SessaoComGrupos, e: AlternarInput): Promise<{ enabled: boolean }> {
   const ligados = await deps.db.contarLigados(e.organizationId, e.channelSessionId);
-  const precisaTrocarFiltro = e.ligar ? ligados === 0 : ligados === 1;
-  if (precisaTrocarFiltro) {
+  const precisaLigarFiltro = ligados === 0;
+  if (precisaLigarFiltro) {
     // `setGroupIntake` pode LANÇAR (timeout, rede) em vez de resolver `false` —
     // as duas coisas significam a mesma coisa aqui: sem confirmação, nada liga.
     let confirmou: boolean;
     try {
-      confirmou = await deps.setGroupIntake(s.provider, s.sessionRef, e.ligar);
+      confirmou = await deps.setGroupIntake(s.provider, s.sessionRef, true);
     } catch {
       confirmou = false;
     }
@@ -126,19 +193,86 @@ export async function alternarGrupo(
   const row = await deps.db.gravarLinha(e.organizationId, e.channelSessionId, {
     group_chat_id: e.groupChatId,
     subject: e.subject,
-    enabled: e.ligar,
-    enabled_at: e.ligar ? agora : null,
-    enabled_by_user_id: e.ligar ? e.actorUserId : null,
+    enabled: true,
+    enabled_at: agora,
+    enabled_by_user_id: e.actorUserId,
   });
   await deps.audit({
-    action: e.ligar ? "channel.group_enabled" : "channel.group_disabled",
+    action: "channel.group_enabled",
     organizationId: e.organizationId,
     actorUserId: e.actorUserId,
     resourceId: row.id,
     requestId: e.requestId,
-    metadata: { channel_session_id: e.channelSessionId, group_chat_id: e.groupChatId, filtro_trocado: precisaTrocarFiltro },
+    metadata: { channel_session_id: e.channelSessionId, group_chat_id: e.groupChatId, filtro_trocado: precisaLigarFiltro },
   });
-  return { enabled: e.ligar };
+  return { enabled: true };
+}
+
+/**
+ * DESLIGAR: grava a linha PRIMEIRO, e só DEPOIS decide o filtro pela
+ * contagem já gravada (I1). Duas razões, uma escrita:
+ *
+ *  - Escrita antes: se `gravarLinha` falhar, o erro sobe puro e o WhatsApp
+ *    nunca foi tocado — não existe mais o caminho em que o filtro desliga e a
+ *    linha fica presa "ligada" porque a escrita quebrou depois.
+ *  - Recontar DEPOIS da escrita (em vez de excluir o alvo da contagem ANTES)
+ *    resolve o bug de C1 de graça: desligar um grupo que já estava desligado
+ *    é idempotente na escrita, e a recontagem seguinte reflete o estado REAL
+ *    (outro grupo ainda ligado não some da conta) — sem precisar perguntar
+ *    "o alvo já estava ligado?" à parte.
+ *
+ * Se a recontagem apontar zero ligados, tenta desligar o filtro. Uma falha
+ * AQUI (recusa ou exceção) NÃO sobe para quem chamou: a linha já está
+ * correta (o grupo está desligado no banco), e deixar o filtro ligado é a
+ * direção segura — o ingest descarta mensagem de grupo não escolhido de
+ * qualquer forma, então o pior efeito é barulho a mais, nunca vazamento. A
+ * falha vira log estruturado e entra no metadata da auditoria, para dar para
+ * achar depois.
+ */
+async function desligarGrupo(deps: DepsDeGrupos, s: SessaoComGrupos, e: AlternarInput): Promise<{ enabled: boolean }> {
+  const row = await deps.db.gravarLinha(e.organizationId, e.channelSessionId, {
+    group_chat_id: e.groupChatId,
+    subject: e.subject,
+    enabled: false,
+    enabled_at: null,
+    enabled_by_user_id: null,
+  });
+  const restantes = await deps.db.contarLigados(e.organizationId, e.channelSessionId);
+  const precisaDesligarFiltro = restantes === 0;
+  let filtroDesligado: boolean | null = null;
+  let motivoFalhaDoFiltro: string | null = null;
+  if (precisaDesligarFiltro) {
+    try {
+      filtroDesligado = await deps.setGroupIntake(s.provider, s.sessionRef, false);
+      if (!filtroDesligado) motivoFalhaDoFiltro = "recusado_pelo_whatsapp";
+    } catch (err) {
+      filtroDesligado = false;
+      motivoFalhaDoFiltro = err instanceof Error ? err.message : String(err);
+    }
+    if (!filtroDesligado) {
+      logger.warn("grupos: não deu para desligar o filtro de recebimento depois de desligar o último grupo", {
+        organizationId: e.organizationId,
+        channelSessionId: e.channelSessionId,
+        groupChatId: e.groupChatId,
+        causa: motivoFalhaDoFiltro,
+      });
+    }
+  }
+  await deps.audit({
+    action: "channel.group_disabled",
+    organizationId: e.organizationId,
+    actorUserId: e.actorUserId,
+    resourceId: row.id,
+    requestId: e.requestId,
+    metadata: {
+      channel_session_id: e.channelSessionId,
+      group_chat_id: e.groupChatId,
+      filtro_trocado: precisaDesligarFiltro,
+      filtro_desligado: filtroDesligado,
+      motivo_falha_do_filtro: motivoFalhaDoFiltro,
+    },
+  });
+  return { enabled: false };
 }
 
 /** Dependências reais. `admin` é service role: TODA consulta filtra `organization_id`. */

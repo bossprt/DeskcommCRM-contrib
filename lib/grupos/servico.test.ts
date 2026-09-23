@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_CHANNEL_PROVIDER } from "@/lib/channels/capabilities";
+import { logger } from "@/lib/logger";
 
 import { alternarGrupo, GrupoError, listarGruposDoNumero, type DepsDeGrupos } from "./servico";
 
@@ -9,6 +10,7 @@ const ORG = "11111111-1111-4111-8111-111111111111";
 const SESS = "22222222-2222-4222-8222-222222222222";
 const G1 = "1@g.us";
 const G2 = "2@g.us";
+const G3_ORFAO = "3@g.us"; // ligado no banco, mas fora da resposta fixa de listGroups (G1/G2)
 
 function deps(opts: { ligados?: string[]; capability?: "full" | "none"; confirma?: boolean } = {}) {
   const linhas = new Map<
@@ -48,13 +50,33 @@ describe("listarGruposDoNumero", () => {
   it("junta a lista do WhatsApp com o estado gravado; o padrão é desligado", async () => {
     const r = await listarGruposDoNumero(deps({ ligados: [G1] }), { organizationId: ORG, channelSessionId: SESS });
     expect(r).toEqual([
-      { chatId: G1, subject: "Cliente A", enabled: true, enabledAt: "2026-09-23T00:00:00.000Z" },
-      { chatId: G2, subject: "Família", enabled: false, enabledAt: null },
+      { chatId: G1, subject: "Cliente A", enabled: true, enabledAt: "2026-09-23T00:00:00.000Z", presente: true },
+      { chatId: G2, subject: "Família", enabled: false, enabledAt: null, presente: true },
     ]);
   });
   it("canal sem capacidade de grupos é recusado", async () => {
     await expect(listarGruposDoNumero(deps({ capability: "none" }), { organizationId: ORG, channelSessionId: SESS }))
       .rejects.toMatchObject({ code: "canal_sem_grupos" });
+  });
+  it("grupo ligado que o número já deixou continua na lista, marcado presente=false, para poder ser desligado", async () => {
+    const r = await listarGruposDoNumero(deps({ ligados: [G1, G3_ORFAO] }), {
+      organizationId: ORG,
+      channelSessionId: SESS,
+    });
+    expect(r).toContainEqual({
+      chatId: G3_ORFAO,
+      subject: null,
+      enabled: true,
+      enabledAt: "2026-09-23T00:00:00.000Z",
+      presente: false,
+    });
+  });
+  it("grupo DESLIGADO que o número já deixou não aparece — não há nada para desligar", async () => {
+    // deps() só devolve G1/G2 no listGroups; um G3 desligado e nunca ligado não
+    // aparece no `listarLinhas` também (nenhuma linha foi criada), então este
+    // caso é o default: nada extra na lista além de G1/G2.
+    const r = await listarGruposDoNumero(deps(), { organizationId: ORG, channelSessionId: SESS });
+    expect(r).toHaveLength(2);
   });
 });
 
@@ -107,5 +129,74 @@ describe("alternarGrupo", () => {
     });
     expect(d.db.gravarLinha).not.toHaveBeenCalled();
     expect(d.audit).not.toHaveBeenCalled();
+  });
+
+  it("ligar grupo já ligado não mexe no filtro (espelho de C1, lado ligar)", async () => {
+    const d = deps({ ligados: [G1] });
+    await expect(alternarGrupo(d, { ...base, groupChatId: G1, ligar: true })).resolves.toEqual({ enabled: true });
+    expect(d.setGroupIntake).not.toHaveBeenCalled();
+  });
+
+  it("C1: desligar grupo já desligado, com outro grupo ligado, não mexe no filtro", async () => {
+    // G1 nunca teve linha (nunca foi ligado); G2 está ligado. Desligar G1 tem
+    // que ser um no-op para o filtro — antes do fix, a contagem TOTAL de
+    // ligados (1, de G2) casava com `ligados === 1` e derrubava o filtro,
+    // deixando G2 preso ligado no banco sem receber nada do WhatsApp.
+    const d = deps({ ligados: [G2] });
+    await expect(alternarGrupo(d, { ...base, groupChatId: G1, ligar: false })).resolves.toEqual({ enabled: false });
+    expect(d.setGroupIntake).not.toHaveBeenCalled();
+    expect(d.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ filtro_trocado: false }) }),
+    );
+  });
+
+  it("I1: desligar grava a linha ANTES de mexer no filtro — escrita falhando não desliga o WhatsApp", async () => {
+    const d = deps({ ligados: [G1] });
+    d.db.gravarLinha = vi.fn(async () => {
+      throw new Error("banco fora do ar");
+    });
+    await expect(alternarGrupo(d, { ...base, groupChatId: G1, ligar: false })).rejects.toThrow("banco fora do ar");
+    expect(d.setGroupIntake).not.toHaveBeenCalled();
+    expect(d.audit).not.toHaveBeenCalled();
+  });
+
+  it("I1: falha ao desligar o filtro DEPOIS da escrita não lança ao chamador; vira log e entra na auditoria", async () => {
+    const d = deps({ ligados: [G1] });
+    const aviso = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    d.setGroupIntake = vi.fn(async () => false);
+    const r = await alternarGrupo(d, { ...base, groupChatId: G1, ligar: false });
+    expect(r).toEqual({ enabled: false });
+    // A linha JÁ FOI gravada como desligada — é o estado correto, mesmo com o
+    // filtro do WhatsApp ainda ligado.
+    expect(d.db.gravarLinha).toHaveBeenCalledWith(
+      ORG,
+      SESS,
+      expect.objectContaining({ group_chat_id: G1, enabled: false }),
+    );
+    expect(d.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "channel.group_disabled",
+        metadata: expect.objectContaining({ filtro_trocado: true, filtro_desligado: false }),
+      }),
+    );
+    expect(aviso).toHaveBeenCalled();
+    aviso.mockRestore();
+  });
+
+  it("I1: exceção ao desligar o filtro DEPOIS da escrita também não lança, e a causa vai para o log/auditoria", async () => {
+    const d = deps({ ligados: [G1] });
+    const aviso = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    d.setGroupIntake = vi.fn(async () => {
+      throw new Error("transporte reiniciando");
+    });
+    const r = await alternarGrupo(d, { ...base, groupChatId: G1, ligar: false });
+    expect(r).toEqual({ enabled: false });
+    expect(d.audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ filtro_desligado: false, motivo_falha_do_filtro: "transporte reiniciando" }),
+      }),
+    );
+    expect(aviso).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ causa: "transporte reiniciando" }));
+    aviso.mockRestore();
   });
 });
