@@ -16,6 +16,15 @@ const messageRow = {
 // Grupo nunca deriva (Task 8, controller A): a IA não serve grupos, e a
 // derivação (visão/transcrição paga) não pode ser pedida para eles.
 const conversationRow = { is_group: false };
+// Fixture de erro (fix round 1, ruling do controller): leitura de
+// `conversations.is_group` que falha — o worker precisa fechar FECHADO
+// (não deriva) em vez de assumir `is_group: false` por omissão.
+let conversationReadError: { message: string } | null = null;
+const loggerWarnMock = vi.fn();
+
+vi.mock("@/lib/logger", () => ({
+  logger: { warn: (...args: unknown[]) => loggerWarnMock(...args), error: vi.fn(), info: vi.fn() },
+}));
 
 vi.mock("@/lib/supabase/admin", () => ({
   createAdminClient: () => ({
@@ -27,8 +36,19 @@ vi.mock("@/lib/supabase/admin", () => ({
     // "canal sem mídia" achando que a sessão não existe.
     from: (tabela: string) => ({
       select: () => {
-        const linha =
-          tabela === "channel_sessions" ? sessionRow : tabela === "conversations" ? conversationRow : messageRow;
+        if (tabela === "conversations") {
+          return {
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () =>
+                  conversationReadError
+                    ? { data: null, error: conversationReadError }
+                    : { data: conversationRow, error: null },
+              }),
+            }),
+          };
+        }
+        const linha = tabela === "channel_sessions" ? sessionRow : messageRow;
         const resolvido = { maybeSingle: async () => ({ data: linha, error: null }) };
         return { eq: () => ({ ...resolvido, eq: () => resolvido }) };
       },
@@ -85,6 +105,8 @@ describe("persistMessageMedia", () => {
     rpcMock.mockReset().mockResolvedValue({ error: null });
     messageRow.media_storage_path = null;
     conversationRow.is_group = false;
+    conversationReadError = null;
+    loggerWarnMock.mockReset();
     vi.mocked(fetchWahaMedia).mockResolvedValue({
       buffer: Buffer.from([1, 2, 3]),
       mime: "image/jpeg",
@@ -134,6 +156,29 @@ describe("persistMessageMedia", () => {
     expect(rpcMock).not.toHaveBeenCalledWith(
       "emit_event",
       expect.objectContaining({ p_event_type: "media.derive_requested" }),
+    );
+  });
+
+  it("erro ao ler conversations.is_group: fecha FECHADO — NÃO pede derivação, avisa com organização/conversa/causa", async () => {
+    conversationReadError = { message: "conexão recusada" };
+    const result = await persistMessageMedia(eventRow());
+    expect(result.status).toBe("ok");
+    expect(uploadMock).toHaveBeenCalled();
+    // A mídia continua persistida mesmo sem saber se a conversa é de grupo.
+    expect(updateEqMock).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ media_status: "stored" }) }),
+    );
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      "emit_event",
+      expect.objectContaining({ p_event_type: "media.derive_requested" }),
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("media-persist"),
+      expect.objectContaining({
+        organization_id: "org1",
+        conversation_id: "conv1",
+        detail: "conexão recusada",
+      }),
     );
   });
 

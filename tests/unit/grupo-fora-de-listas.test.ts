@@ -9,9 +9,9 @@ describe("grupos: quem escuta e quem não escuta", () => {
   });
 
   it("nenhum outro consumidor registrado escuta message.group_received", async () => {
-    const { handlersParaTeste } = await import("@/lib/event-log/dispatcher");
+    const { getRegisteredHandlers } = await import("@/lib/event-log/dispatcher");
     ensureHandlersRegistered();
-    const escutam = handlersParaTeste()
+    const escutam = getRegisteredHandlers()
       .filter((h) => h.events.includes("message.group_received"))
       .map((h) => h.key);
     expect(escutam).toEqual([webPushInboundHandler.key]);
