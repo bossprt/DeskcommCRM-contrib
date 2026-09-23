@@ -51,12 +51,14 @@ create trigger trg_channel_session_groups_updated_at
   before update on public.channel_session_groups
   for each row execute function public.fn_set_updated_at();
 
--- Tabela nova, gravável por `authenticated` (manager), depois do ÚLTIMO bloco
--- que reaplica as travas de somente-leitura do suporte no restante do
--- baseline: sem chamar de novo aqui, a instalação nova (UMA aplicação) fica
--- sem as três travas support_write_* nesta tabela, e só a ATUALIZAÇÃO (que
--- reaplica o arquivo inteiro) as pega. Vigiado por
--- tests/invariants/travas-de-suporte-cobrem-toda-tabela-na-instalacao.test.ts.
+-- ── travas do suporte, depois de toda tabela nova (migration 0274) ─────────
+-- Tabela nova gravável por `authenticated` (manager): sem chamar de novo
+-- aqui, a cadeia de migrations/ (aplicada em produção via CLI/MCP, uma a uma,
+-- nunca reaplica o arquivo inteiro como o baseline.sql do self-host) nunca
+-- ganharia as três travas support_write_* nesta tabela. No baseline.sql o
+-- apêndice desta migration entra ANTES do bloco da VARREDURA anon (0116), e o
+-- ÚLTIMO `fn_aplicar_travas_de_suporte()` do arquivo já cobre esta tabela —
+-- por isso o apêndice NÃO repete esta chamada.
 do $f$ begin perform public.fn_aplicar_travas_de_suporte(); end $f$;
 
 -- 3. Roteamento automático não atribui grupo (quebraria a visibilidade por "sem dono").

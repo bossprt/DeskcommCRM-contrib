@@ -19,20 +19,44 @@ async function comoUsuario(user: string, text: string, args: unknown[] = []) {
   } catch (e) { await c.query("rollback"); throw e; } finally { c.release(); }
 }
 const OUTRA_ORG = "dddddddd-0000-4000-8000-000000000001";
+const OUTRA_SESSAO = "dddddddd-0000-4000-8000-000000000002";
 const GRUPO = "120363000000000001@g.us";
+const GRUPO_DA_OUTRA = "120363000000000099@g.us";
+
+// Snapshot dos contatos que JÁ existiam antes deste arquivo mexer no banco
+// (seed do gov-helpers). Escopar o teste de vocabulário a estes ids — em vez
+// de `select count(*) from contacts` sem filtro — evita que ele dependa da
+// ordem dos `describe`s deste arquivo (mais abaixo, este mesmo arquivo insere
+// contato `kind='whatsapp_group'` de propósito) ou de seed futura que também
+// crie contato de grupo.
+let idsPreExistentes: string[] = [];
 
 beforeAll(async () => {
   await seedGov();
+  idsPreExistentes = (await q("select id from contacts")).rows.map((r) => r.id as string);
   await q(
     "insert into organizations(id,legal_name,display_name,slug) values($1,'Outra','Outra','outra-grupos') on conflict do nothing",
     [OUTRA_ORG],
+  );
+  // Sessão + linha de channel_session_groups da OUTRA organização, gravadas
+  // como superusuário (bypassa RLS de propósito — é o setup, não a prova).
+  // Sem esta linha, a asserção de isolamento cross-org do teste abaixo é
+  // vazia: `count(*) = 0` é garantido com ou sem RLS quando não existe linha
+  // nenhuma da outra organização para vazar.
+  await q(
+    "insert into channel_sessions(id,organization_id,waha_session_name,status,webhook_secret_encrypted) values($1,$2,'outra-grupos-session','WORKING',decode('00','hex')) on conflict do nothing",
+    [OUTRA_SESSAO, OUTRA_ORG],
+  );
+  await q(
+    "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id,subject) values($1,$2,$3,'Grupo da Outra Org')",
+    [OUTRA_ORG, OUTRA_SESSAO, GRUPO_DA_OUTRA],
   );
 });
 afterAll(() => pool.end());
 
 describe("contacts.kind", () => {
-  it("contato existente e novo nascem 'person'; valor fora do vocabulário é recusado", async () => {
-    const r = await q("select count(*)::int n from contacts where kind <> 'person'");
+  it("contatos pré-existentes (seed) nascem 'person'; valor fora do vocabulário é recusado", async () => {
+    const r = await q("select count(*)::int n from contacts where id = any($1) and kind <> 'person'", [idsPreExistentes]);
     expect(r.rows[0].n).toBe(0);
     await expect(q("update contacts set kind='outro' where organization_id=$1", [org])).rejects.toThrow(/check/i);
   });
@@ -44,9 +68,27 @@ describe("channel_session_groups", () => {
     await comoUsuario(manager, "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id,subject) values($1,$2,$3,'Teste')", [org, sessao, GRUPO]);
     await expect(
       comoUsuario(agente, "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id) values($1,$2,'x@g.us')", [org, sessao]),
-    ).rejects.toThrow();
+    ).rejects.toThrow(/row-level security/i);
+
+    // Controle de não-vacuidade: a linha da OUTRA_ORG existe de verdade (foi
+    // semeada em beforeAll como superusuário) — se este count desse 0 também,
+    // a prova de isolamento logo abaixo estaria medindo o nada.
+    const existeMesmo = await q("select count(*)::int n from channel_session_groups where organization_id=$1", [OUTRA_ORG]);
+    expect(existeMesmo.rows[0].n).toBe(1);
+
+    // A prova de isolamento em si: o gerente de `org`, autenticado, não
+    // enxerga a linha real da OUTRA_ORG.
     const daOutra = await comoUsuario(manager, "select count(*)::int n from channel_session_groups where organization_id=$1", [OUTRA_ORG]);
     expect(daOutra.rows[0].n).toBe(0);
+
+    // RLS bloqueia escrita cross-org também, não só leitura: o gerente de
+    // `org` não apaga nem altera a linha da OUTRA_ORG (0 linhas afetadas,
+    // nunca erro — a policy filtra, não lança).
+    const apagouDaOutra = await comoUsuario(manager, "delete from channel_session_groups where organization_id=$1 returning id", [OUTRA_ORG]);
+    expect(apagouDaOutra.rowCount).toBe(0);
+    const aindaExiste = await q("select count(*)::int n from channel_session_groups where organization_id=$1", [OUTRA_ORG]);
+    expect(aindaExiste.rows[0].n).toBe(1);
+
     const doAgente = await comoUsuario(agente, "select count(*)::int n from channel_session_groups where organization_id=$1", [org]);
     expect(doAgente.rows[0].n).toBe(1);
   });
