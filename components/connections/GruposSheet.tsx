@@ -43,6 +43,36 @@ const AVISO_DE_VOLUME =
 const AVISO_DE_DESLIGAR_TODOS =
   "Todos os grupos ligados deste número vão parar de aparecer no chat, e o número vai parar de receber mensagens de grupo.";
 
+const AVISO_DE_FAMILIA_AO_LIGAR_TODOS =
+  "Grupos pessoais e de família desta lista também vão aparecer no chat. Use a busca para selecionar só os grupos de cliente antes de confirmar.";
+
+/**
+ * O PUT sequencial de "Desligar todos"/"Ligar todos" — mesmo loop para os
+ * dois, extraído para não duplicar a regra: NUNCA em paralelo (o servidor
+ * decide o filtro de grupo do WhatsApp contando linhas `enabled`, e duas
+ * escritas concorrentes brigariam por essa contagem), para no primeiro erro.
+ * Quem chama decide o `enabled` de destino e observa o progresso.
+ */
+async function executarPutEmLote(
+  channelId: string,
+  alvos: Grupo[],
+  enabled: boolean,
+  onProgresso: (atual: number, total: number) => void,
+): Promise<{ concluidos: number; falhou: Grupo | null }> {
+  let concluidos = 0;
+  for (const g of alvos) {
+    onProgresso(concluidos + 1, alvos.length);
+    const res = await fetch(`/api/v1/channel-sessions/${channelId}/groups`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group_chat_id: g.chatId, subject: g.subject, enabled }),
+    });
+    if (!res.ok) return { concluidos, falhou: g };
+    concluidos++;
+  }
+  return { concluidos, falhou: null };
+}
+
 /** Busca insensível a maiúscula/minúscula e a acento: "grupo sao" acha "Grupo São". */
 function normalizarBusca(s: string): string {
   return s
@@ -65,9 +95,14 @@ export function GruposSheet({
   const [salvando, setSalvando] = useState<string | null>(null);
   const [busca, setBusca] = useState("");
   const [confirmarDesligarTodos, setConfirmarDesligarTodos] = useState(false);
-  const [progressoDesligar, setProgressoDesligar] = useState<{
+  const [confirmarLigarTodos, setConfirmarLigarTodos] = useState<{
+    alvos: Grupo[];
+    mostrarAvisoDeVolume: boolean;
+  } | null>(null);
+  const [progresso, setProgresso] = useState<{
     atual: number;
     total: number;
+    acao: "ligar" | "desligar";
   } | null>(null);
 
   const carregar = useCallback(async () => {
@@ -115,41 +150,54 @@ export function GruposSheet({
   }
 
   /**
-   * Desliga todos os grupos ligados, um PUT por vez — NUNCA em paralelo. O
-   * servidor decide o filtro de grupo do WhatsApp contando linhas `enabled`;
-   * disparar em paralelo faria duas escritas concorrentes brigarem por essa
-   * contagem. Para no primeiro erro (e diz qual grupo falhou e quantos já
-   * foram desligados); sempre recarrega a lista do GET no fim, sucesso ou não.
+   * Desliga todos os grupos ligados. Sempre recarrega a lista do GET no fim,
+   * sucesso ou não — a mensagem de falha (se houver) é só ARMADA antes do
+   * reload e aplicada DEPOIS, senão o `carregar()` do `finally` (que limpa
+   * `erro` no início) a apagaria antes de qualquer um vê-la.
    */
   async function desligarTodos() {
     const alvos = (grupos ?? []).filter((g) => g.enabled);
-    const total = alvos.length;
     setConfirmarDesligarTodos(false);
     setErro(null);
-    setProgressoDesligar({ atual: 0, total });
-    let desligados = 0;
-    // `carregar()` limpa `erro` no início — se a mensagem de falha fosse
-    // gravada antes do `await carregar()` do `finally`, o próprio reload a
-    // apagaria antes de qualquer um vê-la. Por isso ela é só ARMADA aqui e
-    // aplicada DEPOIS do reload.
+    setProgresso({ atual: 0, total: alvos.length, acao: "desligar" });
     let mensagemDeFalha: string | null = null;
     try {
-      for (const g of alvos) {
-        setProgressoDesligar({ atual: desligados + 1, total });
-        const res = await fetch(`/api/v1/channel-sessions/${channelId}/groups`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ group_chat_id: g.chatId, subject: g.subject, enabled: false }),
-        });
-        if (!res.ok) {
-          const rotulo = g.subject ?? t("Grupo sem nome");
-          mensagemDeFalha = `${t("Não foi possível desligar todos os grupos.")} ${t("Falhou em")} "${rotulo}" ${t("depois de desligar")} ${desligados}.`;
-          return;
-        }
-        desligados++;
+      const { concluidos, falhou } = await executarPutEmLote(channelId, alvos, false, (atual, total) =>
+        setProgresso({ atual, total, acao: "desligar" }),
+      );
+      if (falhou) {
+        const rotulo = falhou.subject ?? t("Grupo sem nome");
+        mensagemDeFalha = `${t("Não foi possível desligar todos os grupos.")} ${t("Falhou em")} "${rotulo}" ${t("depois de desligar")} ${concluidos}.`;
       }
     } finally {
-      setProgressoDesligar(null);
+      setProgresso(null);
+      await carregar();
+      if (mensagemDeFalha) setErro(mensagemDeFalha);
+    }
+  }
+
+  /**
+   * Liga todos os grupos VISÍVEIS (respeitando a busca) que ainda estão
+   * desligados — nunca os já ligados nem os que a busca escondeu. Mesma
+   * regra de `desligarTodos`: sequencial, para no primeiro erro, sempre
+   * recarrega no fim. O aviso de volume (quando nenhum grupo estava ligado
+   * ainda) já foi mostrado na confirmação; não repete durante o loop.
+   */
+  async function ligarTodos(alvos: Grupo[]) {
+    setConfirmarLigarTodos(null);
+    setErro(null);
+    setProgresso({ atual: 0, total: alvos.length, acao: "ligar" });
+    let mensagemDeFalha: string | null = null;
+    try {
+      const { concluidos, falhou } = await executarPutEmLote(channelId, alvos, true, (atual, total) =>
+        setProgresso({ atual, total, acao: "ligar" }),
+      );
+      if (falhou) {
+        const rotulo = falhou.subject ?? t("Grupo sem nome");
+        mensagemDeFalha = `${t("Não foi possível ligar todos os grupos.")} ${t("Falhou em")} "${rotulo}" ${t("depois de ligar")} ${concluidos}.`;
+      }
+    } finally {
+      setProgresso(null);
       await carregar();
       if (mensagemDeFalha) setErro(mensagemDeFalha);
     }
@@ -164,6 +212,11 @@ export function GruposSheet({
       normalizarBusca(g.subject ?? t("Grupo sem nome")).includes(alvo),
     );
   }, [grupos, busca, t]);
+
+  // "Ligar todos" age sempre sobre os VISÍVEIS (respeitando a busca) que
+  // ainda estão desligados — nunca sobre um já ligado nem sobre um que a
+  // busca escondeu.
+  const alvosParaLigar = useMemo(() => filtrados.filter((g) => !g.enabled), [filtrados]);
 
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
@@ -182,16 +235,36 @@ export function GruposSheet({
             <Button variant="outline" size="sm" onClick={() => void carregar()}>
               {t("Atualizar lista")}
             </Button>
-            {ligados >= 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={progressoDesligar !== null}
-                onClick={() => setConfirmarDesligarTodos(true)}
-              >
-                {t("Desligar todos")}
-              </Button>
-            )}
+            <div className="flex items-center gap-2">
+              {alvosParaLigar.length > 0 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={progresso !== null}
+                  onClick={() =>
+                    setConfirmarLigarTodos({ alvos: alvosParaLigar, mostrarAvisoDeVolume: ligados === 0 })
+                  }
+                >
+                  {busca === "" ? (
+                    t("Ligar todos")
+                  ) : (
+                    <>
+                      {t("Ligar os")} {alvosParaLigar.length} {t("do filtro")}
+                    </>
+                  )}
+                </Button>
+              )}
+              {ligados >= 1 && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={progresso !== null}
+                  onClick={() => setConfirmarDesligarTodos(true)}
+                >
+                  {t("Desligar todos")}
+                </Button>
+              )}
+            </div>
           </div>
 
           {grupos && (
@@ -200,9 +273,10 @@ export function GruposSheet({
             </p>
           )}
 
-          {progressoDesligar && (
+          {progresso && (
             <p className="text-xs text-muted-foreground" role="status">
-              {t("Desligando")} {progressoDesligar.atual} {t("de")} {progressoDesligar.total}
+              {progresso.acao === "ligar" ? t("Ligando") : t("Desligando")} {progresso.atual}{" "}
+              {t("de")} {progresso.total}
             </p>
           )}
 
@@ -247,6 +321,24 @@ export function GruposSheet({
             </div>
           )}
 
+          {confirmarLigarTodos && (
+            <div role="alertdialog" className="rounded-md border p-3 text-sm">
+              <p>
+                {confirmarLigarTodos.alvos.length} {t("grupos vão ligar e aparecer no chat.")}
+              </p>
+              <p>{t(AVISO_DE_FAMILIA_AO_LIGAR_TODOS)}</p>
+              {confirmarLigarTodos.mostrarAvisoDeVolume && <p>{t(AVISO_DE_VOLUME)}</p>}
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" onClick={() => void ligarTodos(confirmarLigarTodos.alvos)}>
+                  {t("Ligar todos mesmo assim")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setConfirmarLigarTodos(null)}>
+                  {t("Cancelar")}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {grupos && grupos.length > 0 && (
             <Input
               type="search"
@@ -273,7 +365,7 @@ export function GruposSheet({
                 <Switch
                   aria-label={g.subject ?? t("Grupo sem nome")}
                   checked={g.enabled}
-                  disabled={salvando === g.chatId || progressoDesligar !== null}
+                  disabled={salvando === g.chatId || progresso !== null}
                   onCheckedChange={(v) => alternar(g, v)}
                 />
               </li>

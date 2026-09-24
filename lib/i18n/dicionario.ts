@@ -4660,6 +4660,21 @@ export const DICIONARIO: Traducoes = {
   "A partir de agora, o WhatsApp deste número passa a enviar mensagens de todos os grupos para o sistema. Só os grupos ligados aparecem no chat; os outros são descartados.": {
     es: "A partir de ahora, el WhatsApp de este número empieza a enviar mensajes de todos los grupos al sistema. Solo los grupos activados aparecen en el chat; los demás se descartan.",
   },
+  "Ligar todos": { es: "Activar todos" },
+  "Ligar os": { es: "Activar los" },
+  "do filtro": { es: "del filtro" },
+  "Ligar todos mesmo assim": { es: "Activar todos de todos modos" },
+  Ligando: { es: "Activando" },
+  "Não foi possível ligar todos os grupos.": {
+    es: "No se pudieron activar todos los grupos.",
+  },
+  "depois de ligar": { es: "después de activar" },
+  "grupos vão ligar e aparecer no chat.": {
+    es: "grupos se van a activar y aparecerán en el chat.",
+  },
+  "Grupos pessoais e de família desta lista também vão aparecer no chat. Use a busca para selecionar só os grupos de cliente antes de confirmar.": {
+    es: "Los grupos personales y familiares de esta lista también van a aparecer en el chat. Usa la búsqueda para seleccionar solo los grupos de cliente antes de confirmar.",
+  },
   "Este número não tem conversa, mensagem nem configuração ligada a ele.": {
     es: "Este número no tiene conversaciones, mensajes ni configuración asociados.",
   },
