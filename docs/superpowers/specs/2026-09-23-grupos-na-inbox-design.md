@@ -88,8 +88,10 @@ Uma migration nova, com o `NNNN` escolhido na hora
      `subject text`, `enabled boolean not null default false`, `enabled_at timestamptz`,
      `enabled_by_user_id uuid`, `created_at`, `updated_at`.
    - `unique (organization_id, channel_session_id, group_chat_id)`.
-   - RLS `tenant_isolation_channel_session_groups_all` via `fn_user_org_ids()`. A escrita
-     exige papel `manager` ou maior.
+   - RLS: membros da organização LEEM (`channel_session_groups_select`, via
+     `fn_user_org_ids()`). **Só o service role escreve** (decisão do dono na revisão
+     final, 23/09/2026): não há policy nem grant de escrita para `anon`/`authenticated`.
+     O `manager` liga e desliga pela API, que exige o papel, confirma o filtro e audita.
 2. **Coluna `contacts.kind text not null default 'person'`**, com
    `check (kind in ('person','whatsapp_group'))`.
    - Todo contato que já existe vira `person` pelo default, sem backfill.
@@ -176,7 +178,11 @@ Evidência em `.superpowers/evidence/`.
 
 **Fora desta versão:** histórico anterior ao ligar; lista de atendentes por grupo (a
 saída 2, que mexe em `fn_can_view_conversation`); moderação, membros e criar ou sair de
-grupo (o escopo da #1428); grupos em canais `limited`.
+grupo (o escopo da #1428); grupos em canais `limited`; **exportação e anonimização LGPD
+de `messages.metadata.group_sender`** (nome/telefone/lid de participantes). Decisão do dono
+na revisão final (23/09/2026): o rótulo do remetente é de uso interno, e o dado sensível é
+tratado sob a responsabilidade do dono da operação; a cascata LGPD alcança só o contato
+do grupo.
 
 **Reversão:** desligar todos os grupos devolve o número ao estado atual (`ignore.groups =
 true`). O histórico gravado fica guardado; apagá-lo é outra decisão, deliberada.
