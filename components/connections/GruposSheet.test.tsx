@@ -64,4 +64,139 @@ describe("GruposSheet", () => {
     expect(screen.getByText(/o número saiu deste grupo/i)).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: /Grupo Antigo/ })).toBeChecked();
   });
+
+  it("a lista rola dentro do próprio container, não a folha inteira", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([{ chatId: "1@g.us", subject: "Cliente A", enabled: true, enabledAt: "x", presente: true }]),
+    );
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    const item = await screen.findByText("Cliente A");
+    const container = item.closest("ul")?.parentElement;
+    expect(container).not.toBeNull();
+    expect(container).toHaveClass("overflow-y-auto");
+  });
+
+  it("busca filtra a lista por assunto, ignorando maiúsculas e acentos", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([
+        { chatId: "1@g.us", subject: "Grupo São Paulo", enabled: false, enabledAt: null, presente: true },
+        { chatId: "2@g.us", subject: "Família", enabled: false, enabledAt: null, presente: true },
+      ]),
+    );
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    await screen.findByText("Grupo São Paulo");
+    const campo = screen.getByPlaceholderText("Buscar grupo");
+    fireEvent.change(campo, { target: { value: "grupo sao" } });
+    expect(screen.getByText("Grupo São Paulo")).toBeInTheDocument();
+    expect(screen.queryByText("Família")).not.toBeInTheDocument();
+  });
+
+  it("busca sem correspondência mostra 'Nenhum grupo encontrado'", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([
+        { chatId: "1@g.us", subject: "Cliente A", enabled: false, enabledAt: null, presente: true },
+      ]),
+    );
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    await screen.findByText("Cliente A");
+    fireEvent.change(screen.getByPlaceholderText("Buscar grupo"), {
+      target: { value: "não existe" },
+    });
+    expect(await screen.findByText("Nenhum grupo encontrado")).toBeInTheDocument();
+  });
+
+  it("mostra o contador de grupos ligados", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([
+        { chatId: "1@g.us", subject: "A", enabled: true, enabledAt: "x", presente: true },
+        { chatId: "2@g.us", subject: "B", enabled: false, enabledAt: null, presente: true },
+        { chatId: "3@g.us", subject: "C", enabled: true, enabledAt: "x", presente: true },
+      ]),
+    );
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    expect(await screen.findByText("2 de 3 ligados")).toBeInTheDocument();
+  });
+
+  it("'Desligar todos' fica oculto sem nenhum grupo ligado", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([{ chatId: "1@g.us", subject: "A", enabled: false, enabledAt: null, presente: true }]),
+    );
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    await screen.findByText("A");
+    expect(screen.queryByRole("button", { name: "Desligar todos" })).not.toBeInTheDocument();
+  });
+
+  it("'Desligar todos' confirma e envia um PUT por grupo, sequencialmente", async () => {
+    fetchMock.mockReturnValueOnce(
+      resposta([
+        { chatId: "1@g.us", subject: "A", enabled: true, enabledAt: "x", presente: true },
+        { chatId: "2@g.us", subject: "B", enabled: true, enabledAt: "x", presente: true },
+        { chatId: "3@g.us", subject: "C", enabled: false, enabledAt: null, presente: true },
+      ]),
+    );
+
+    const ordem: string[] = [];
+    const estado: { resolver: (() => void) | null } = { resolver: null };
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { group_chat_id: string };
+        return new Promise((resolve) => {
+          estado.resolver = () => {
+            ordem.push(body.group_chat_id);
+            resolve(new Response(JSON.stringify({ data: {} }), { status: 200 }));
+          };
+        });
+      }
+      return resposta([]);
+    });
+
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    await screen.findByText("A");
+
+    fireEvent.click(screen.getByRole("button", { name: "Desligar todos" }));
+    expect(
+      await screen.findByText(/vão parar de aparecer no chat/i),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Desligar todos mesmo assim" }));
+
+    // Só o primeiro PUT deve ter disparado até aqui — a prova de sequencial.
+    await waitFor(() => expect(estado.resolver).not.toBeNull());
+    const primeiraResolucao = estado.resolver;
+    expect(ordem).toEqual([]);
+
+    primeiraResolucao?.();
+    await waitFor(() => expect(ordem).toEqual(["1@g.us"]));
+
+    // O segundo PUT só é disparado DEPOIS do primeiro resolver.
+    await waitFor(() => expect(estado.resolver).not.toBe(primeiraResolucao));
+    fetchMock.mockReturnValueOnce(resposta([]));
+    estado.resolver?.();
+    await waitFor(() => expect(ordem).toEqual(["1@g.us", "2@g.us"]));
+  });
+
+  it("desligar todos para no primeiro erro e reporta qual grupo falhou", async () => {
+    fetchMock
+      .mockReturnValueOnce(
+        resposta([
+          { chatId: "1@g.us", subject: "A", enabled: true, enabledAt: "x", presente: true },
+          { chatId: "2@g.us", subject: "B", enabled: true, enabledAt: "x", presente: true },
+        ]),
+      )
+      .mockReturnValueOnce(resposta({ code: "filtro_nao_confirmado", message: "x" }, 502))
+      .mockReturnValueOnce(
+        resposta([
+          { chatId: "1@g.us", subject: "A", enabled: false, enabledAt: null, presente: true },
+          { chatId: "2@g.us", subject: "B", enabled: true, enabledAt: "x", presente: true },
+        ]),
+      );
+
+    render(<GruposSheet channelId="s1" onClose={() => {}} />);
+    await screen.findByText("A");
+    fireEvent.click(screen.getByRole("button", { name: "Desligar todos" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Desligar todos mesmo assim" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Falhou em "A" depois de desligar 0/i)).toBeInTheDocument(),
+    );
+  });
 });

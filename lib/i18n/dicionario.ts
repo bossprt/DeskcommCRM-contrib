@@ -4643,6 +4643,20 @@ export const DICIONARIO: Traducoes = {
   "Este número não está em nenhum grupo.": {
     es: "Este número no está en ningún grupo.",
   },
+  "Buscar grupo": { es: "Buscar grupo" },
+  "Nenhum grupo encontrado": { es: "No se encontró ningún grupo" },
+  ligados: { es: "activados" },
+  "Desligar todos": { es: "Desactivar todos" },
+  Desligando: { es: "Desactivando" },
+  "Desligar todos mesmo assim": { es: "Desactivar todos de todos modos" },
+  "Não foi possível desligar todos os grupos.": {
+    es: "No se pudieron desactivar todos los grupos.",
+  },
+  "Falhou em": { es: "Falló en" },
+  "depois de desligar": { es: "después de desactivar" },
+  "Todos os grupos ligados deste número vão parar de aparecer no chat, e o número vai parar de receber mensagens de grupo.": {
+    es: "Todos los grupos activados de este número van a dejar de aparecer en el chat, y el número va a dejar de recibir mensajes de grupo.",
+  },
   "A partir de agora, o WhatsApp deste número passa a enviar mensagens de todos os grupos para o sistema. Só os grupos ligados aparecem no chat; os outros são descartados.": {
     es: "A partir de ahora, el WhatsApp de este número empieza a enviar mensajes de todos los grupos al sistema. Solo los grupos activados aparecen en el chat; los demás se descartan.",
   },
