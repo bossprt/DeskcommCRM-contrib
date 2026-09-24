@@ -63,12 +63,58 @@ describe("contacts.kind", () => {
 });
 
 describe("channel_session_groups", () => {
-  it("isola por organização (RLS) e só gerente escreve", async () => {
+  // I5 (revisão final, decisão do dono): só o service role ESCREVE. Membro da
+  // org só lê; a API grava pelo service role depois de confirmar o filtro do
+  // WhatsApp e auditar. Uma escrita direta pelo PostgREST pularia os dois.
+  async function comoServiceRole(text: string, args: unknown[] = []) {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role service_role");
+      const r = await c.query(text, args); await c.query("commit"); return r;
+    } catch (e) { await c.query("rollback"); throw e; } finally { c.release(); }
+  }
+  async function comoAnon(text: string, args: unknown[] = []) {
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role anon");
+      const r = await c.query(text, args); await c.query("commit"); return r;
+    } catch (e) { await c.query("rollback"); throw e; } finally { c.release(); }
+  }
+  const RECUSA = /permission denied|row-level security/i;
+
+  it("isola por organização (RLS), membro só LÊ e só o service role escreve", async () => {
     await q("delete from channel_session_groups where organization_id=$1", [org]);
-    await comoUsuario(manager, "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id,subject) values($1,$2,$3,'Teste')", [org, sessao, GRUPO]);
+
+    // O escritor legítimo: service role grava, altera e apaga.
+    const gravada = await comoServiceRole(
+      "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id,subject) values($1,$2,$3,'Teste') returning id",
+      [org, sessao, GRUPO],
+    );
+    expect(gravada.rowCount).toBe(1);
+    const alterada = await comoServiceRole("update channel_session_groups set enabled=true where organization_id=$1 and group_chat_id=$2 returning id", [org, GRUPO]);
+    expect(alterada.rowCount).toBe(1);
+
+    // Gerente — o papel que a policy antiga deixava escrever — não insere, não
+    // altera e não apaga nem na PRÓPRIA org.
+    await expect(
+      comoUsuario(manager, "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id) values($1,$2,'y@g.us')", [org, sessao]),
+    ).rejects.toThrow(RECUSA);
+    await expect(
+      comoUsuario(manager, "update channel_session_groups set enabled=false, conversation_id=null where organization_id=$1", [org]),
+    ).rejects.toThrow(RECUSA);
+    await expect(
+      comoUsuario(manager, "delete from channel_session_groups where organization_id=$1", [org]),
+    ).rejects.toThrow(RECUSA);
     await expect(
       comoUsuario(agente, "insert into channel_session_groups(organization_id,channel_session_id,group_chat_id) values($1,$2,'x@g.us')", [org, sessao]),
-    ).rejects.toThrow(/row-level security/i);
+    ).rejects.toThrow(RECUSA);
+    await expect(
+      comoAnon("insert into channel_session_groups(organization_id,channel_session_id,group_chat_id) values($1,$2,'z@g.us')", [org, sessao]),
+    ).rejects.toThrow(RECUSA);
+
+    // Nada do que o gerente tentou pegou: a linha continua ligada, e só ela existe.
+    const estado = await q("select count(*)::int n, bool_and(enabled) ligada from channel_session_groups where organization_id=$1", [org]);
+    expect(estado.rows[0]).toEqual({ n: 1, ligada: true });
 
     // Controle de não-vacuidade: a linha da OUTRA_ORG existe de verdade (foi
     // semeada em beforeAll como superusuário) — se este count desse 0 também,
@@ -77,20 +123,21 @@ describe("channel_session_groups", () => {
     expect(existeMesmo.rows[0].n).toBe(1);
 
     // A prova de isolamento em si: o gerente de `org`, autenticado, não
-    // enxerga a linha real da OUTRA_ORG.
+    // enxerga a linha real da OUTRA_ORG, e lê a da própria.
     const daOutra = await comoUsuario(manager, "select count(*)::int n from channel_session_groups where organization_id=$1", [OUTRA_ORG]);
     expect(daOutra.rows[0].n).toBe(0);
-
-    // RLS bloqueia escrita cross-org também, não só leitura: o gerente de
-    // `org` não apaga nem altera a linha da OUTRA_ORG (0 linhas afetadas,
-    // nunca erro — a policy filtra, não lança).
-    const apagouDaOutra = await comoUsuario(manager, "delete from channel_session_groups where organization_id=$1 returning id", [OUTRA_ORG]);
-    expect(apagouDaOutra.rowCount).toBe(0);
-    const aindaExiste = await q("select count(*)::int n from channel_session_groups where organization_id=$1", [OUTRA_ORG]);
-    expect(aindaExiste.rows[0].n).toBe(1);
-
     const doAgente = await comoUsuario(agente, "select count(*)::int n from channel_session_groups where organization_id=$1", [org]);
     expect(doAgente.rows[0].n).toBe(1);
+  });
+
+  it("nenhuma escrita concedida a anon/authenticated (grant, não só policy)", async () => {
+    const r = await q(
+      `select grantee, privilege_type from information_schema.role_table_grants
+        where table_schema='public' and table_name='channel_session_groups'
+          and privilege_type in ('INSERT','UPDATE','DELETE','TRUNCATE')
+          and grantee in ('anon','authenticated','PUBLIC')`,
+    );
+    expect(r.rows).toEqual([]);
   });
 });
 
@@ -123,6 +170,37 @@ describe("conversa de grupo no banco", () => {
     const nomes = tipos.rows.map((r) => r.event_type);
     expect(nomes).toContain("message.group_received");
     expect(nomes).not.toContain("message.received");
+  });
+
+  it("I3: grupo sem dono é 'aguardando' no campo calculado (fila humana), nunca 'automatico'", async () => {
+    const { conversa } = await conversaDeGrupo();
+    const semDono = await q("select public.comando_da_conversa(c) v from conversations c where c.id=$1", [conversa]);
+    expect(semDono.rows[0].v).toBe("aguardando");
+    await q("update conversations set assigned_to_user_id=$2 where id=$1", [conversa, manager]);
+    const comDono = await q("select public.comando_da_conversa(c) v from conversations c where c.id=$1", [conversa]);
+    expect(comDono.rows[0].v).toBe("humano");
+    // Controle: a regra ainda chama de 'automatico' a conversa 1:1 equivalente.
+    const umParaUm = await q(
+      "select public.fn_comando_da_conversa('open', null, null, false, false, now(), false) v",
+    );
+    expect(umParaUm.rows[0].v).toBe("automatico");
+  });
+
+  it("I2: a reabertura da entrada de grupo (mesmo UPDATE) tira a conversa de fechada, sem pedir roteamento", async () => {
+    const { conversa } = await conversaDeGrupo();
+    await q("update conversations set status='closed' where id=$1", [conversa]);
+    const c = await pool.connect();
+    try {
+      await c.query("begin"); await c.query("set local role service_role");
+      const r = await c.query(
+        "update conversations set status='open', status_changed_at=now() where organization_id=$1 and id=$2 and is_group=true and status = any($3) returning status",
+        [org, conversa, ["closed", "resolved", "archived"]],
+      );
+      await c.query("commit");
+      expect(r.rows).toEqual([{ status: "open" }]);
+    } finally { c.release(); }
+    const rota = await q("select count(*)::int n from event_log where organization_id=$1 and entity_id=$2 and event_type='conversation.routing_requested'", [org, conversa]);
+    expect(rota.rows[0].n).toBe(0);
   });
 
   it("conversa individual continua emitindo message.received (controle)", async () => {

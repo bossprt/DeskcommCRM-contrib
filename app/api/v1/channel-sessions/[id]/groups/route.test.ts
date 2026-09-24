@@ -51,6 +51,15 @@ describe("grupos do número", () => {
     const res = await PUT(new NextRequest("http://x", { method: "PUT", body: JSON.stringify({ group_chat_id: "1@g.us", enabled: true }) }), ctx);
     expect(res.status).toBe(502);
   });
+  it("WhatsApp fora do ar na listagem vira 502 com envelope de erro, não 500 cru", async () => {
+    autorizado();
+    vi.mocked(listarGruposDoNumero).mockRejectedValue(new Error("groups_422"));
+    const res = await GET(new NextRequest("http://x"), ctx);
+    expect(res.status).toBe(502);
+    const corpo = (await res.json()) as { error: { code: string; message: string } };
+    expect(corpo.error.code).toBe("channel_unavailable");
+    expect(corpo.error.message).toMatch(/não respondeu/);
+  });
   it("body inválido é 400", async () => {
     autorizado();
     const res = await PUT(new NextRequest("http://x", { method: "PUT", body: JSON.stringify({ group_chat_id: "5568@c.us", enabled: "sim" }) }), ctx);

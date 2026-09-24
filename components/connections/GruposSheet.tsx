@@ -110,7 +110,11 @@ export function GruposSheet({
     const res = await fetch(`/api/v1/channel-sessions/${channelId}/groups`);
     const j = (await res.json().catch(() => null)) as { data?: Grupo[] } | null;
     if (!res.ok || !j?.data) {
-      setErro(t("Não consegui ler os grupos deste número."));
+      setErro(
+        res.status === 502
+          ? t("O WhatsApp deste número não respondeu. Confira se ele está conectado e tente de novo.")
+          : t("Não consegui ler os grupos deste número."),
+      );
       return;
     }
     setGrupos(j.data);

@@ -47,6 +47,13 @@ export interface IngestDeGrupoDb {
   vincular(org: string, grupoId: string, contactId: string, conversationId: string): Promise<void>;
   inserirMensagem(row: Record<string, unknown>): Promise<"ok" | "duplicada">;
   /**
+   * Conversa de grupo FECHADA (closed/resolved/archived) volta a `open` quando chega
+   * mensagem nova — o que a conversa individual faz em `fn_service_inbound`, que pula grupos.
+   * Sem isto, um "resolver" num grupo esconde para sempre as mensagens seguintes em
+   * "Fechadas". Não aciona roteamento: `fn_request_channel_routing` pula `is_group`.
+   */
+  reabrirSeFechada(org: string, conversationId: string): Promise<void>;
+  /**
    * `direction` vai no fim porque o carimbo compartilhado
    * (`fn_mark_conversation_message`) move `last_inbound_at` OU `last_outbound_at`
    * e o contador de não lidas conforme o sentido — sem ele, o carimbo erraria.
@@ -101,6 +108,7 @@ export async function gravarMensagemDeGrupo(
     },
   });
   if (resultado === "duplicada") return "duplicada";
+  if (e.direction === "inbound") await db.reabrirSeFechada(e.organizationId, conversationId);
   // Mesma prévia da conversa individual (`previewFromMessage`): texto até 280, ou `[tipo]`.
   const preview = e.body ? e.body.slice(0, 280) : e.type !== "text" ? `[${e.type}]` : "";
   await db.marcarConversa(e.organizationId, conversationId, preview, e.sentAt, e.direction);
@@ -239,6 +247,26 @@ export function criarIngestDeGrupoDb(admin: SupabaseClient): IngestDeGrupoDb {
         }
       }
       return "ok";
+    },
+
+    async reabrirSeFechada(org, conversationId) {
+      // `trg_service_stamp_status` carimba a revisão de serviço e limpa o dono,
+      // como na reabertura da conversa individual. O filtro `is_group` garante
+      // que este caminho nunca reabre uma conversa 1:1.
+      const { error } = await admin
+        .from("conversations")
+        .update({ status: "open", status_changed_at: new Date().toISOString() })
+        .eq("organization_id", org)
+        .eq("id", conversationId)
+        .eq("is_group", true)
+        .in("status", ["closed", "resolved", "archived"]);
+      if (error) {
+        logger.warn("[grupos.ingest] conversa de grupo fechada não reaberta", {
+          organization_id: org,
+          conversation_id: conversationId,
+          causa: error.message,
+        });
+      }
     },
 
     async marcarConversa(org, conversationId, preview, quando, direction) {

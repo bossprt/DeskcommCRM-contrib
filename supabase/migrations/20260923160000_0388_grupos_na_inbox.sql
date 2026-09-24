@@ -15,9 +15,16 @@ create index if not exists idx_contacts_org_kind on public.contacts (organizatio
 -- mesclada (`is_merged_into is not null`) sai da disputa, como os demais índices de
 -- identidade de `contacts` — senão o grupo perdedor de um merge segura o
 -- `group_chat_id` para sempre e a ingestão nunca cria (nem reencontra) o vencedor.
--- `drop`+`create` (não só `if not exists`) porque um banco de dev pode já ter o
--- índice na definição antiga sem a guarda, e recriar é o único jeito de curá-lo.
-drop index if exists uq_contacts_grupo;
+-- Só derruba o índice quando ele está na definição ANTIGA (sem a guarda de
+-- merge) — um banco de dev pode tê-la. Na definição certa não há rebuild: sem
+-- este `if`, todo `update.sh` reconstruía o índice com trava de escrita e
+-- varredura inteira de `contacts`.
+do $$ begin
+  if exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'uq_contacts_grupo'
+              and indexdef not like '%is_merged_into IS NULL%') then
+    drop index public.uq_contacts_grupo;
+  end if;
+end $$;
 create unique index if not exists uq_contacts_grupo on public.contacts (organization_id, (source_metadata->>'group_chat_id')) where kind = 'whatsapp_group' and is_merged_into is null;
 
 -- 2. Os grupos de cada número, com a chave liga/desliga.
@@ -38,19 +45,20 @@ create table if not exists public.channel_session_groups (
 );
 alter table public.channel_session_groups enable row level security;
 
+-- Só o service role ESCREVE (decisão do dono, revisão final): o único escritor
+-- legítimo é a API (`lib/grupos/servico.ts`), que confirma o filtro do WhatsApp
+-- antes de gravar e audita. Uma policy de escrita para gerente deixava o
+-- PostgREST ligar grupo sem filtro e sem auditoria, ou apontar
+-- `conversation_id` para uma conversa 1:1 (e a mensagem do grupo emitiria
+-- `message.received`, acordando IA e automações). Membro da org só LÊ.
+-- O `revoke` explícito é o que protege no Supabase real: o default ACL de
+-- tabelas em `public` concede tudo a anon/authenticated (ver CLAUDE.md, 0258).
 drop policy if exists tenant_isolation_channel_session_groups_all on public.channel_session_groups;
 drop policy if exists channel_session_groups_select on public.channel_session_groups;
 drop policy if exists channel_session_groups_write on public.channel_session_groups;
 create policy channel_session_groups_select on public.channel_session_groups
   for select using (organization_id in (select public.fn_user_org_ids()));
-create policy tenant_isolation_channel_session_groups_all on public.channel_session_groups
-  for all using (
-    organization_id in (select public.fn_user_org_ids())
-    and public.fn_role_at_least(organization_id, 'manager')
-  ) with check (
-    organization_id in (select public.fn_user_org_ids())
-    and public.fn_role_at_least(organization_id, 'manager')
-  );
+revoke insert, update, delete, truncate on public.channel_session_groups from anon, authenticated;
 
 drop trigger if exists trg_channel_session_groups_updated_at on public.channel_session_groups;
 create trigger trg_channel_session_groups_updated_at
@@ -58,7 +66,7 @@ create trigger trg_channel_session_groups_updated_at
   for each row execute function public.fn_set_updated_at();
 
 -- ── travas do suporte, depois de toda tabela nova (migration 0274) ─────────
--- Tabela nova gravável por `authenticated` (manager): sem chamar de novo
+-- Tabela nova (lida por `authenticated`, escrita só pelo service role): sem chamar de novo
 -- aqui, a cadeia de migrations/ (aplicada em produção via CLI/MCP, uma a uma,
 -- nunca reaplica o arquivo inteiro como o baseline.sql do self-host) nunca
 -- ganharia as três travas support_write_* nesta tabela. No baseline.sql o
@@ -679,3 +687,67 @@ end;
 $$;
 revoke all on function public.fn_lgpd_cascade_redact_contact(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.fn_lgpd_cascade_redact_contact(uuid,uuid,uuid) to service_role;
+
+-- 6. Grupo sem dono é conversa HUMANA esperando alguém ('aguardando'), nunca
+-- 'automatico': o automático nunca atende grupo (o banco nem emite
+-- message.received para ele). Sem isto o grupo aparecia como "Automático
+-- atendendo" e morava na aba Automático, fora da fila humana.
+-- `p_is_group` entra como SÉTIMO parâmetro, com default: a assinatura de seis é
+-- removida antes (duas sobrecargas com default tornariam a chamada de seis
+-- ambígua). Funções `language sql` não registram dependência, então o drop não
+-- arrasta `comando_da_conversa(c)`, que é recriada logo abaixo passando
+-- `c.is_group`. Espelho TS: `comandoDaConversa()` em
+-- lib/inbox/comando-da-conversa.ts, casados por
+-- tests/invariants/comando-da-conversa-espelha-o-ts.test.ts.
+drop function if exists public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz);
+create or replace function public.fn_comando_da_conversa(
+  p_status                text,
+  p_assigned_to_user_id   uuid,
+  p_bot_silenced_until    timestamptz,
+  p_force_human           boolean,
+  p_is_blocked            boolean,
+  p_agora                 timestamptz,
+  p_is_group              boolean default false
+) returns text
+language sql
+immutable
+set search_path = public
+as $fn_comando$
+  select case
+    -- A ordem é a mesma de `comandoDaConversa`, e ela é o contrato: dono primeiro
+    -- (a aba "Fechadas" precisa continuar dizendo QUEM atendeu), encerrada depois,
+    -- e só então as travas — grupo entre elas.
+    when p_assigned_to_user_id is not null then 'humano'
+    when p_status in ('closed', 'archived', 'resolved') then 'encerrada'
+    when p_is_group is true
+      or p_force_human is true
+      or p_is_blocked is true
+      or (p_bot_silenced_until is not null and p_bot_silenced_until > p_agora) then 'aguardando'
+    else 'automatico'
+  end;
+$fn_comando$;
+
+comment on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean)
+  is 'Quem manda na conversa. Espelho SQL de comandoDaConversa() (lib/inbox/comando-da-conversa.ts); as duas são casadas por tests/invariants/comando-da-conversa-espelha-o-ts.test.ts. Grupo sem dono é aguardando (migration 0388).';
+
+create or replace function public.comando_da_conversa(c public.conversations)
+returns text
+language sql
+stable
+set search_path = public
+as $comando$
+  select public.fn_comando_da_conversa(
+    c.status,
+    c.assigned_to_user_id,
+    c.bot_silenced_until,
+    coalesce((select ct.force_human from public.contacts ct where ct.id = c.contact_id), false),
+    coalesce((select ct.is_blocked  from public.contacts ct where ct.id = c.contact_id), false),
+    now(),
+    coalesce(c.is_group, false)
+  );
+$comando$;
+
+revoke execute on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean) from public, anon;
+revoke execute on function public.comando_da_conversa(public.conversations) from public, anon;
+grant  execute on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean) to authenticated, service_role;
+grant  execute on function public.comando_da_conversa(public.conversations) to authenticated, service_role;

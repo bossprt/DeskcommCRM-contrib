@@ -182,6 +182,7 @@ export function ConversationListItem({
     last_handoff_reason: conversation.last_handoff_reason ?? null,
     force_human: c?.force_human ?? null,
     is_blocked: c?.is_blocked ?? null,
+    is_group: conversation.is_group ?? false,
     automaticoDaOrg,
   });
   const isAi = comando.quem === "automatico";

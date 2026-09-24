@@ -89,10 +89,17 @@ describe("alternarGrupo", () => {
       expect.objectContaining({ action: "channel.group_enabled", organizationId: ORG, actorUserId: "u1" }),
     );
   });
-  it("ligar um SEGUNDO grupo não mexe no filtro", async () => {
+  it("I1: ligar um SEGUNDO grupo TAMBÉM confere o filtro — cura o filtro que derivou (sessão recriada)", async () => {
     const d = deps({ ligados: [G2] });
     await alternarGrupo(d, { ...base, groupChatId: G1, ligar: true });
-    expect(d.setGroupIntake).not.toHaveBeenCalled();
+    expect(d.setGroupIntake).toHaveBeenCalledWith(expect.anything(), "s1", true);
+  });
+  it("I1: com grupos já ligados e o filtro sem confirmar, o novo grupo NÃO fica ligado", async () => {
+    const d = deps({ ligados: [G2], confirma: false });
+    await expect(alternarGrupo(d, { ...base, groupChatId: G1, ligar: true })).rejects.toMatchObject({
+      code: "filtro_nao_confirmado",
+    });
+    expect(d.db.gravarLinha).not.toHaveBeenCalled();
   });
   it("desligar o ÚLTIMO grupo volta a ignorar grupos", async () => {
     const d = deps({ ligados: [G1] });
@@ -131,10 +138,10 @@ describe("alternarGrupo", () => {
     expect(d.audit).not.toHaveBeenCalled();
   });
 
-  it("ligar grupo já ligado não mexe no filtro (espelho de C1, lado ligar)", async () => {
+  it("I1: religar grupo já ligado reconfere o filtro (o no-op, se houver, é do transporte, sem escrita)", async () => {
     const d = deps({ ligados: [G1] });
     await expect(alternarGrupo(d, { ...base, groupChatId: G1, ligar: true })).resolves.toEqual({ enabled: true });
-    expect(d.setGroupIntake).not.toHaveBeenCalled();
+    expect(d.setGroupIntake).toHaveBeenCalledWith(expect.anything(), "s1", true);
   });
 
   it("C1: desligar grupo já desligado, com outro grupo ligado, não mexe no filtro", async () => {

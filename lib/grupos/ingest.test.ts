@@ -17,6 +17,7 @@ function db(grupo: Awaited<ReturnType<IngestDeGrupoDb["grupoLigado"]>>, dup = fa
     vincular: vi.fn<IngestDeGrupoDb["vincular"]>(async () => {}),
     inserirMensagem: vi.fn<IngestDeGrupoDb["inserirMensagem"]>(async () => (dup ? "duplicada" : "ok")),
     marcarConversa: vi.fn<IngestDeGrupoDb["marcarConversa"]>(async () => {}),
+    reabrirSeFechada: vi.fn<IngestDeGrupoDb["reabrirSeFechada"]>(async () => {}),
   } satisfies IngestDeGrupoDb;
 }
 
@@ -74,6 +75,22 @@ describe("gravarMensagemDeGrupo", () => {
     ).resolves.toBe("gravada");
   });
 
+  it("I2: mensagem RECEBIDA reabre a conversa do grupo se ela estiver fechada, antes de carimbar", async () => {
+    const d = db({ id: "g1", subject: "A", contactId: "c", conversationId: "v" });
+    await gravarMensagemDeGrupo(d, entrada());
+    expect(d.reabrirSeFechada).toHaveBeenCalledWith(ORG, "v");
+    expect(d.reabrirSeFechada.mock.invocationCallOrder[0]).toBeLessThan(d.marcarConversa.mock.invocationCallOrder[0]!);
+  });
+
+  it("I2: mensagem enviada do celular e mensagem repetida NÃO reabrem", async () => {
+    const eco = db({ id: "g1", subject: "A", contactId: "c", conversationId: "v" });
+    await gravarMensagemDeGrupo(eco, entrada({ direction: "outbound", remetente: null }));
+    expect(eco.reabrirSeFechada).not.toHaveBeenCalled();
+    const dup = db({ id: "g1", subject: "A", contactId: "c", conversationId: "v" }, true);
+    await gravarMensagemDeGrupo(dup, entrada());
+    expect(dup.reabrirSeFechada).not.toHaveBeenCalled();
+  });
+
   it("remetente fora do formato não derruba a mensagem: grava sem group_sender", async () => {
     const d = db({ id: "g1", subject: "A", contactId: "c", conversationId: "v" });
     await expect(
@@ -105,6 +122,7 @@ function adminDeMentira(cfg: {
       insert: (linha: unknown) => { cmd.op = "insert"; cmd.linha = linha; return q; },
       update: (linha: unknown) => { cmd.op = "update"; cmd.linha = linha; return q; },
       eq: (c: string, v: unknown) => { cmd.filtros.push([c, v]); return q; },
+      in: (c: string, v: unknown) => { cmd.filtros.push([c, v]); return q; },
       single: fim,
       maybeSingle: fim,
       then: (ok: (v: unknown) => unknown) => fim().then(ok),
@@ -203,6 +221,21 @@ describe("criarIngestDeGrupoDb — dois webhooks do mesmo grupo novo terminam nu
     });
     expect(r).toBe("duplicada");
     expect(rpcs).toHaveLength(0);
+  });
+
+  it("I2: reabrir só alcança conversa DE GRUPO, fechada, da própria organização", async () => {
+    const { admin, comandos } = adminDeMentira({});
+    await criarIngestDeGrupoDb(admin as never).reabrirSeFechada(ORG, "v");
+    expect(comandos).toHaveLength(1);
+    expect(comandos[0]).toMatchObject({ tabela: "conversations", op: "update", linha: expect.objectContaining({ status: "open" }) });
+    expect(comandos[0]!.filtros).toEqual(
+      expect.arrayContaining([
+        ["organization_id", ORG],
+        ["id", "v"],
+        ["is_group", true],
+        ["status", ["closed", "resolved", "archived"]],
+      ]),
+    );
   });
 
   it("carimbo da conversa passa pela função compartilhada (fn_mark_conversation_message)", async () => {

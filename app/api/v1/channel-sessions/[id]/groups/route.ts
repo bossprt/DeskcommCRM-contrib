@@ -10,6 +10,7 @@ import { fail, ok } from "@/lib/api/wrappers";
 import { requireRole } from "@/lib/auth/require-role";
 import { alternarGrupo, criarDepsDeGrupos, GrupoError, listarGruposDoNumero } from "@/lib/grupos/servico";
 import { requireSupportWrite } from "@/lib/impersonate/support";
+import { logger } from "@/lib/logger";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +30,19 @@ const STATUS: Record<GrupoError["code"], number> = {
 
 function falhaDeGrupo(err: unknown, requestId: string): Response {
   if (err instanceof GrupoError) return fail(err.code, err.code, STATUS[err.code], { requestId });
-  throw err;
+  // O resto é o transporte: sessão fora de WORKING, provedor fora do ar ou sem
+  // configuração. Antes subia como 500 cru do Next, sem o envelope `{ error }`
+  // nem o request id.
+  logger.warn("grupos: o transporte do canal não respondeu", {
+    requestId,
+    causa: err instanceof Error ? err.message : String(err),
+  });
+  return fail(
+    "channel_unavailable",
+    "O WhatsApp deste número não respondeu. Confira se ele está conectado e tente de novo.",
+    502,
+    { requestId },
+  );
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }): Promise<Response> {

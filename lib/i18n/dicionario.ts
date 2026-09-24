@@ -4628,6 +4628,9 @@ export const DICIONARIO: Traducoes = {
   "Não consegui ler os grupos deste número.": {
     es: "No pude leer los grupos de este número.",
   },
+  "O WhatsApp deste número não respondeu. Confira se ele está conectado e tente de novo.": {
+    es: "WhatsApp de este número no respondió. Verifica que esté conectado e inténtalo de nuevo.",
+  },
   "O WhatsApp não confirmou a mudança. Nada foi alterado; tente de novo.": {
     es: "WhatsApp no confirmó el cambio. No se alteró nada; inténtalo de nuevo.",
   },

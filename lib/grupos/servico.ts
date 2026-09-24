@@ -2,9 +2,14 @@
  * Grupos de WhatsApp na inbox: qual grupo de cada número entra no CRM.
  * Spec: docs/superpowers/specs/2026-09-23-grupos-na-inbox-design.md
  *
- * O filtro do WhatsApp é tudo ou nada por número: ligar o PRIMEIRO grupo passa a receber
+ * O filtro do WhatsApp é tudo ou nada por número: com pelo menos um grupo ligado ele recebe
  * todos (e a entrada descarta os não escolhidos); desligar o ÚLTIMO volta a ignorar. A troca
  * do filtro precisa ser CONFIRMADA antes de gravar "ligado": nunca fica ligado sem estar.
+ *
+ * O filtro se AUTOCORRIGE: todo "ligar" confere o filtro (não só o primeiro), e a conexão e a
+ * reconexão do número o ressincronizam a partir de `channel_session_groups`
+ * (`sincronizarRecebimentoDeGrupos`, em `sincronizar-filtro.ts`). A conferência é barata porque o transporte lê antes
+ * e só escreve quando o valor difere — sem escrita e sem reinício de sessão quando já está certo.
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
@@ -126,16 +131,11 @@ export async function listarGruposDoNumero(
 }
 
 /**
- * Race residual, aceito de propósito (ruling I2): dois gestores trocando o
- * MESMO número ao mesmo tempo podem intercalar leitura e escrita sem que nada
- * aqui sirva de trava — não há transação através do PostgREST (cada chamada é
- * um request HTTP isolado), e forçar `setGroupIntake` em TODO enable/disable
- * para fechar a janela reinicia a sessão do WhatsApp a cada clique, o que foi
- * medido como pior que o risco: um clique duplo vira reconexão visível do
- * canal para o dono da operação. A recontagem DEPOIS da escrita no caminho de
- * DESLIGAR (abaixo) estreita a janela ao mínimo possível sem lock: mesmo que
- * duas chamadas concorrentes leiam o mesmo estado "antes", cada uma decide o
- * destino do FILTRO a partir da contagem já gravada, não da lida no início.
+ * Concorrência: dois gestores trocando o MESMO número ao mesmo tempo não têm
+ * trava (não há transação através do PostgREST). Não precisa: todo LIGAR
+ * reconfere o filtro (idempotente no transporte — lê antes, escreve só se
+ * difere), e o DESLIGAR decide pelo que já está gravado. Um intercalamento
+ * ruim é corrigido pelo próximo ligar ou pela próxima (re)conexão do número.
  */
 export async function alternarGrupo(
   deps: DepsDeGrupos,
@@ -170,25 +170,23 @@ interface AlternarInput {
  * LIGAR: confirma o filtro ANTES de gravar — nunca fica "ligado" no banco sem
  * estar ligado de verdade no WhatsApp (invariante do serviço).
  *
- * A contagem é lida ANTES da escrita e conta TODAS as linhas ligadas,
- * inclusive o próprio alvo se ele já estivesse ligado — por isso, se o alvo
- * já está ligado, a contagem nunca é zero (ele mesmo já soma 1) e o filtro
- * não é tocado de novo: religar um grupo já ligado é no-op para o filtro.
+ * O filtro é conferido em TODO ligar, não só no primeiro. Antes, com outro
+ * grupo já ligado o filtro não era tocado — e um filtro que derivou (sessão
+ * recriada depois de arquivar, volume do provedor perdido) nunca mais se curava:
+ * o banco dizia "ligado" e nenhuma mensagem de grupo chegava. A conferência
+ * não custa reinício de sessão: o transporte só escreve quando o valor
+ * atual difere.
  */
 async function ligarGrupo(deps: DepsDeGrupos, s: SessaoComGrupos, e: AlternarInput): Promise<{ enabled: boolean }> {
-  const ligados = await deps.db.contarLigados(e.organizationId, e.channelSessionId);
-  const precisaLigarFiltro = ligados === 0;
-  if (precisaLigarFiltro) {
-    // `setGroupIntake` pode LANÇAR (timeout, rede) em vez de resolver `false` —
-    // as duas coisas significam a mesma coisa aqui: sem confirmação, nada liga.
-    let confirmou: boolean;
-    try {
-      confirmou = await deps.setGroupIntake(s.provider, s.sessionRef, true);
-    } catch {
-      confirmou = false;
-    }
-    if (!confirmou) throw new GrupoError("filtro_nao_confirmado");
+  // `setGroupIntake` pode LANÇAR (timeout, rede) em vez de resolver `false` —
+  // as duas coisas significam a mesma coisa aqui: sem confirmação, nada liga.
+  let confirmou: boolean;
+  try {
+    confirmou = await deps.setGroupIntake(s.provider, s.sessionRef, true);
+  } catch {
+    confirmou = false;
   }
+  if (!confirmou) throw new GrupoError("filtro_nao_confirmado");
   const agora = deps.agora().toISOString();
   const row = await deps.db.gravarLinha(e.organizationId, e.channelSessionId, {
     group_chat_id: e.groupChatId,
@@ -203,7 +201,7 @@ async function ligarGrupo(deps: DepsDeGrupos, s: SessaoComGrupos, e: AlternarInp
     actorUserId: e.actorUserId,
     resourceId: row.id,
     requestId: e.requestId,
-    metadata: { channel_session_id: e.channelSessionId, group_chat_id: e.groupChatId, filtro_trocado: precisaLigarFiltro },
+    metadata: { channel_session_id: e.channelSessionId, group_chat_id: e.groupChatId, filtro_confirmado: true },
   });
   return { enabled: true };
 }

@@ -483,6 +483,14 @@ export class WahaClient {
     };
     const atual = await ler();
     if (!atual?.config) return false;
+    // IDEMPOTENTE: já está como pedido → confirma sem PUT. O PUT reinicia a
+    // sessão (vai a STARTING), e este método é chamado em TODO "ligar grupo" e
+    // em toda (re)conexão do número — escrever sem mudança seria um reinício
+    // de sessão por clique.
+    const ignoreAtual = typeof atual.config.ignore === "object" && atual.config.ignore
+      ? (atual.config.ignore as Record<string, unknown>)
+      : null;
+    if (ignoreAtual && ignoreAtual.groups === !receber) return true;
     const ignore = {
       ...((typeof atual.config.ignore === "object" && atual.config.ignore) || {}),
       ...CHAVES_DO_FILTRO_FIXAS,

@@ -275,8 +275,9 @@ const PROVA_PROPRIA: readonly Excecao[] = [
     tabela: "channel_session_groups",
     razao:
       "tests/invariants/grupos-na-inbox.test.ts (\"isola por organização " +
-      "(RLS) e só gerente escreve\") — manager da organização de teste lê e " +
-      "escreve, agent é recusado na escrita (gate de papel), e a leitura por " +
+      "(RLS), membro só LÊ e só o service role escreve\") — membros da " +
+      "organização de teste leem, manager/agent/anon são recusados na escrita " +
+      "(sem grant nem policy de escrita), service role grava, e a leitura por " +
       "JWT devolve 0 linhas da outra organização. Migration 0388.",
   },
 ];

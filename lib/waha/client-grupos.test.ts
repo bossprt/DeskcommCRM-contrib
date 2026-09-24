@@ -97,6 +97,14 @@ describe("grupos no cliente do WAHA", () => {
     });
   });
 
+  it("I1: pedir o valor que a sessão JÁ tem confirma sem PUT (sem reinício de sessão)", async () => {
+    sessao.config.ignore.groups = false;
+    await expect(cliente().definirRecebimentoDeGrupos("s1", true)).resolves.toBe(true);
+    sessao.config.ignore.groups = true;
+    await expect(cliente().definirRecebimentoDeGrupos("s1", false)).resolves.toBe(true);
+    expect(putsRecebidos).toHaveLength(0);
+  });
+
   it("devolve false quando o WAHA responde 200 mas o GET não reflete a troca", async () => {
     ignorarProximoPut = true;
     await expect(cliente().definirRecebimentoDeGrupos("s1", true)).resolves.toBe(false);
