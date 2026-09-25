@@ -115,7 +115,7 @@ describe("alternarGrupo", () => {
   });
   it("id que não é de grupo é recusado antes de qualquer efeito", async () => {
     const d = deps();
-    await expect(alternarGrupo(d, { ...base, groupChatId: "5568999990000@c.us", ligar: true })).rejects.toThrow();
+    await expect(alternarGrupo(d, { ...base, groupChatId: "5521999990000@c.us", ligar: true })).rejects.toThrow();
     expect(d.setGroupIntake).not.toHaveBeenCalled();
   });
   it("aceita chat id de grupo no formato legado com hífen (medido no servidor real)", async () => {

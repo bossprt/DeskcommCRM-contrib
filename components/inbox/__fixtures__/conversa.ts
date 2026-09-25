@@ -44,13 +44,13 @@ const conversation: ConversationWithContact = {
     id: "contact-1",
     display_name: "Maria",
     name: "Maria",
-    phone_number: "+5568999990000",
+    phone_number: "+5521999990000",
     tags: [],
     is_blocked: false,
     is_anonymized: false,
   },
   channel_sessions: {
-    phone_number: "+5568988880000",
+    phone_number: "+5521988880000",
     display_name: "WhatsApp",
     // Sem nomear o provider (doutrina restrição-de-canal) — o teste não
     // pergunta pela capacidade dele, um rótulo neutro basta.

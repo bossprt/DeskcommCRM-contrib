@@ -7,7 +7,7 @@ const SESS = "22222222-2222-4222-8222-222222222222";
 const entrada = (o: Partial<EntradaDeGrupo> = {}): EntradaDeGrupo => ({
   organizationId: ORG, channelSessionId: SESS, groupChatId: "1@g.us", direction: "inbound",
   externalId: "ext-1", type: "text", body: "oi", mediaUrl: null, mediaMime: null,
-  sentAt: "2026-09-23T12:00:00.000Z", remetente: { name: "Maria", phone: "+5568999990000", lid: null }, rawType: "chat", ...o,
+  sentAt: "2026-09-23T12:00:00.000Z", remetente: { name: "Maria", phone: "+5521999990000", lid: null }, rawType: "chat", ...o,
 });
 function db(grupo: Awaited<ReturnType<IngestDeGrupoDb["grupoLigado"]>>, dup = false) {
   return {
@@ -37,7 +37,7 @@ describe("gravarMensagemDeGrupo", () => {
     const row = d.inserirMensagem.mock.calls[0]![0];
     expect(row).toMatchObject({
       organization_id: ORG, conversation_id: "conversa-g", contact_id: "contato-g", direction: "inbound", external_id: "ext-1",
-      metadata: { raw_type: "chat", group_sender: { name: "Maria", phone: "+5568999990000", lid: null } },
+      metadata: { raw_type: "chat", group_sender: { name: "Maria", phone: "+5521999990000", lid: null } },
     });
   });
   it("grupo já vinculado reaproveita contato e conversa", async () => {

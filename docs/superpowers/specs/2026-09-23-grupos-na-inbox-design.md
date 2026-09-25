@@ -1,8 +1,6 @@
 # Grupos de WhatsApp na inbox: histórico e resposta manual
 
-**Data:** 23/09/2026 · **Status:** desenho aprovado pelo dono do repositório, aguardando plano
-**Repositório:** `bossprt/DeskcommCRM` (cópia privada). Pensado para poder ser oferecido ao
-original depois, sem compromisso.
+**Data:** 23/09/2026 · **Status:** desenho aprovado, implementado
 
 ## Problema
 
@@ -14,11 +12,11 @@ grupos já na origem.
 O caso de uso real são **grupos de clientes**: a equipe precisa ver o histórico desses
 grupos e responder por lá, manualmente. **A IA nunca responde em grupo.**
 
-## Decisões tomadas com o dono do repositório
+## Decisões de desenho
 
-1. **Construir nesta cópia**, sem esperar o original. Existe uma issue aberta,
-   melgarafael/DeskcommCRM#1428, em que um contribuidor oferece um módulo de grupos com
-   moderação, de cerca de 10 mil linhas. Ela ainda não tem resposta e não tem prazo.
+1. **Recorte mínimo, no núcleo.** A issue #1428 propõe um módulo de grupos com
+   moderação, de cerca de 10 mil linhas. Este desenho cobre só histórico e resposta
+   manual, reaproveitando conversa e mensagem; moderação fica fora (ver "Fora desta versão").
 2. **Só entram os grupos escolhidos.** Uma lista de permitidos por número conectado. O
    padrão é desligado.
 3. **Visibilidade pelo mecanismo que já existe (saída 1).** O grupo é uma conversa
@@ -89,7 +87,7 @@ Uma migration nova, com o `NNNN` escolhido na hora
      `enabled_by_user_id uuid`, `created_at`, `updated_at`.
    - `unique (organization_id, channel_session_id, group_chat_id)`.
    - RLS: membros da organização LEEM (`channel_session_groups_select`, via
-     `fn_user_org_ids()`). **Só o service role escreve** (decisão do dono na revisão
+     `fn_user_org_ids()`). **Só o service role escreve** (decidido na revisão
      final, 23/09/2026): não há policy nem grant de escrita para `anon`/`authenticated`.
      O `manager` liga e desliga pela API, que exige o papel, confirma o filtro e audita.
 2. **Coluna `contacts.kind text not null default 'person'`**, com
@@ -166,7 +164,7 @@ filtro "Grupos".
 - **Permissão:** o atendente recebe 403 ao ligar grupo, pela API.
 
 **Prova na tela** (DoD 12), no ambiente local, com um número e um grupo **de teste**
-criado pelo dono:
+criado para isso:
 
 1. ligar o grupo;
 2. mensagem pelo celular aparece na inbox com o remetente;
@@ -179,17 +177,18 @@ Evidência em `.superpowers/evidence/`.
 **Fora desta versão:** histórico anterior ao ligar; lista de atendentes por grupo (a
 saída 2, que mexe em `fn_can_view_conversation`); moderação, membros e criar ou sair de
 grupo (o escopo da #1428); grupos em canais `limited`; **exportação e anonimização LGPD
-de `messages.metadata.group_sender`** (nome/telefone/lid de participantes). Decisão do dono
-na revisão final (23/09/2026): o rótulo do remetente é de uso interno, e o dado sensível é
-tratado sob a responsabilidade do dono da operação; a cascata LGPD alcança só o contato
-do grupo.
+de `messages.metadata.group_sender`** (nome/telefone/lid de participantes). Racional: o rótulo
+do remetente é de uso interno do atendimento (mostrar quem mandou cada mensagem), o
+participante não é contato do CRM e não há chave confiável para achá-lo por titular; o
+dado fica sob a responsabilidade do controlador, que opera o número. A cascata LGPD
+alcança só o contato do grupo. Estender a cascata a `group_sender` é trabalho futuro
+explícito, não esquecimento.
 
 **Reversão:** desligar todos os grupos devolve o número ao estado atual (`ignore.groups =
 true`). O histórico gravado fica guardado; apagá-lo é outra decisão, deliberada.
 
-**Risco conhecido:** o original pode mudar `lib/waha/ingest.ts`. O
-`scripts/fork/atualizar-do-original.sh` para quando há conflito e avisa; não resolve
-sozinho.
+**Risco conhecido:** `lib/waha/ingest.ts` é ponto quente de mudança; o desvio de grupo
+fica isolado em `lib/grupos/ingest.ts` para reduzir conflito.
 
 ## Definition of Done aplicável
 

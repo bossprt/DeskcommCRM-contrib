@@ -63,7 +63,7 @@ describe("contacts.kind", () => {
 });
 
 describe("channel_session_groups", () => {
-  // I5 (revisão final, decisão do dono): só o service role ESCREVE. Membro da
+  // I5 (revisão final): só o service role ESCREVE. Membro da
   // org só lê; a API grava pelo service role depois de confirmar o filtro do
   // WhatsApp e auditar. Uma escrita direta pelo PostgREST pularia os dois.
   async function comoServiceRole(text: string, args: unknown[] = []) {

@@ -312,11 +312,11 @@ describe("MessageBubble — remetente de grupo", () => {
         message={msg({
           direction: "inbound",
           body: "bom dia",
-          metadata: { group_sender: { name: "Maria", phone: "+5568999990000", lid: null } },
+          metadata: { group_sender: { name: "Maria", phone: "+5521999990000", lid: null } },
         })}
       />,
     );
-    expect(screen.getByText("Maria · +5568999990000")).toBeInTheDocument();
+    expect(screen.getByText("Maria · +5521999990000")).toBeInTheDocument();
   });
 
   it("mensagem individual não mostra remetente", () => {
@@ -334,10 +334,10 @@ describe("MessageBubble — remetente de grupo", () => {
         message={msg({
           direction: "outbound",
           body: "bom dia",
-          metadata: { group_sender: { name: "Maria", phone: "+5568999990000", lid: null } },
+          metadata: { group_sender: { name: "Maria", phone: "+5521999990000", lid: null } },
         })}
       />,
     );
-    expect(screen.queryByText("Maria · +5568999990000")).toBeNull();
+    expect(screen.queryByText("Maria · +5521999990000")).toBeNull();
   });
 });

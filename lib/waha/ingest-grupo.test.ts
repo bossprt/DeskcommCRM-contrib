@@ -102,7 +102,7 @@ const RECEBIDA: WahaPayload = {
   fromMe: false,
   body: "bom dia, grupo",
   participant: "70192801575156@lid",
-  _data: { pushName: "Maria", key: { participantAlt: "5568999990000@s.whatsapp.net" } },
+  _data: { pushName: "Maria", key: { participantAlt: "5521999990000@s.whatsapp.net" } },
 };
 
 const DO_CELULAR: WahaPayload = {
@@ -150,7 +150,7 @@ describe("grupo LIGADO — a mensagem entra com o remetente e sem os efeitos da 
       direction: "inbound",
       external_id: RECEBIDA.id,
       body: "bom dia, grupo",
-      metadata: { group_sender: { name: "Maria", phone: "+5568999990000", lid: "70192801575156" } },
+      metadata: { group_sender: { name: "Maria", phone: "+5521999990000", lid: "70192801575156" } },
     });
     expect(b.rpcs.map((r) => r.fn)).toEqual(["fn_mark_conversation_message"]);
     // Nenhum contato por participante: o upsert de contato individual nem é chamado.
@@ -194,13 +194,13 @@ describe("grupo LIGADO — a mensagem entra com o remetente e sem os efeitos da 
 
 describe("remetenteDoGrupo — quem escreveu, tirado do autor e nunca do `from`", () => {
   it("autor @lid com participantAlt: lid e telefone real", () => {
-    expect(remetenteDoGrupo(RECEBIDA)).toEqual({ name: "Maria", phone: "+5568999990000", lid: "70192801575156" });
+    expect(remetenteDoGrupo(RECEBIDA)).toEqual({ name: "Maria", phone: "+5521999990000", lid: "70192801575156" });
   });
 
   it("autor com telefone: o telefone vem do próprio autor", () => {
-    expect(remetenteDoGrupo({ from: GRUPO, author: "5568999990000@c.us", _data: { notifyName: "João" } })).toEqual({
+    expect(remetenteDoGrupo({ from: GRUPO, author: "5521999990000@c.us", _data: { notifyName: "João" } })).toEqual({
       name: "João",
-      phone: "+5568999990000",
+      phone: "+5521999990000",
       lid: null,
     });
   });

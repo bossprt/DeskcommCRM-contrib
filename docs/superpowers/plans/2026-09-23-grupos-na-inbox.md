@@ -402,8 +402,8 @@ import { lerRemetenteDeGrupo, rotuloDoRemetente } from "./remetente-de-grupo";
 
 describe("remetente de grupo", () => {
   it("lê o remetente gravado em metadata.group_sender", () => {
-    const r = lerRemetenteDeGrupo({ raw_type: "chat", group_sender: { name: "Maria", phone: "+5568999990000", lid: null } });
-    expect(r).toEqual({ name: "Maria", phone: "+5568999990000", lid: null });
+    const r = lerRemetenteDeGrupo({ raw_type: "chat", group_sender: { name: "Maria", phone: "+5521999990000", lid: null } });
+    expect(r).toEqual({ name: "Maria", phone: "+5521999990000", lid: null });
   });
   it("devolve null quando não é mensagem de grupo ou o formato é outro", () => {
     expect(lerRemetenteDeGrupo({ raw_type: "chat" })).toBeNull();
@@ -411,8 +411,8 @@ describe("remetente de grupo", () => {
     expect(lerRemetenteDeGrupo(null)).toBeNull();
   });
   it("rótulo prefere o nome, depois o telefone, depois 'Participante'", () => {
-    expect(rotuloDoRemetente({ name: "Maria", phone: "+5568999990000", lid: null })).toBe("Maria · +5568999990000");
-    expect(rotuloDoRemetente({ name: null, phone: "+5568999990000", lid: null })).toBe("+5568999990000");
+    expect(rotuloDoRemetente({ name: "Maria", phone: "+5521999990000", lid: null })).toBe("Maria · +5521999990000");
+    expect(rotuloDoRemetente({ name: null, phone: "+5521999990000", lid: null })).toBe("+5521999990000");
     expect(rotuloDoRemetente({ name: null, phone: null, lid: "123" })).toBe("Participante");
   });
 });
@@ -875,7 +875,7 @@ describe("alternarGrupo", () => {
   });
   it("id que não é de grupo é recusado antes de qualquer efeito", async () => {
     const d = deps();
-    await expect(alternarGrupo(d, { ...base, groupChatId: "5568999990000@c.us", ligar: true })).rejects.toThrow();
+    await expect(alternarGrupo(d, { ...base, groupChatId: "5521999990000@c.us", ligar: true })).rejects.toThrow();
     expect(d.setGroupIntake).not.toHaveBeenCalled();
   });
 });
@@ -1278,7 +1278,7 @@ const SESS = "22222222-2222-4222-8222-222222222222";
 const entrada = (o: Partial<EntradaDeGrupo> = {}): EntradaDeGrupo => ({
   organizationId: ORG, channelSessionId: SESS, groupChatId: "1@g.us", direction: "inbound",
   externalId: "ext-1", type: "text", body: "oi", mediaUrl: null, mediaMime: null,
-  sentAt: "2026-09-23T12:00:00.000Z", remetente: { name: "Maria", phone: "+5568999990000", lid: null }, rawType: "chat", ...o,
+  sentAt: "2026-09-23T12:00:00.000Z", remetente: { name: "Maria", phone: "+5521999990000", lid: null }, rawType: "chat", ...o,
 });
 function db(grupo: Awaited<ReturnType<IngestDeGrupoDb["grupoLigado"]>>, dup = false) {
   return {
@@ -1307,7 +1307,7 @@ describe("gravarMensagemDeGrupo", () => {
     const row = d.inserirMensagem.mock.calls[0]![0];
     expect(row).toMatchObject({
       organization_id: ORG, conversation_id: "conversa-g", contact_id: "contato-g", direction: "inbound", external_id: "ext-1",
-      metadata: { raw_type: "chat", group_sender: { name: "Maria", phone: "+5568999990000", lid: null } },
+      metadata: { raw_type: "chat", group_sender: { name: "Maria", phone: "+5521999990000", lid: null } },
     });
   });
   it("grupo já vinculado reaproveita contato e conversa", async () => {
@@ -1830,8 +1830,8 @@ Em `components/inbox/MessageBubble.test.tsx`, um caso novo (copie o `render` e a
 
 ```tsx
 it("mensagem de grupo mostra quem mandou acima do balão", () => {
-  renderBubble({ direction: "inbound", body: "bom dia", metadata: { group_sender: { name: "Maria", phone: "+5568999990000", lid: null } } });
-  expect(screen.getByText("Maria · +5568999990000")).toBeInTheDocument();
+  renderBubble({ direction: "inbound", body: "bom dia", metadata: { group_sender: { name: "Maria", phone: "+5521999990000", lid: null } } });
+  expect(screen.getByText("Maria · +5521999990000")).toBeInTheDocument();
 });
 it("mensagem individual não mostra remetente", () => {
   renderBubble({ direction: "inbound", body: "bom dia", metadata: {} });
@@ -1989,7 +1989,7 @@ git commit -m "docs(grupos): doutrina de grupos na inbox e nota de versão"
 
 ### Task 13: Prova na tela (DoD 12)
 
-Com o ambiente local no ar (`docker compose -f docker-compose.local.yml -f docker-compose.windows.local.yml --env-file .env.local up -d --build`), o número **de teste** conectado e **um grupo de teste criado pelo dono**, com um segundo celular dentro. Nunca um grupo de clientes reais.
+Com o ambiente local no ar (`docker compose -f docker-compose.local.yml --env-file .env.local up -d --build`), o número **de teste** conectado e **um grupo de teste criado para isso**, com um segundo celular dentro. Nunca um grupo de clientes reais.
 
 **Files:**
 - Create: `.superpowers/evidence/grupos-na-inbox/2026-09-23/*.png`

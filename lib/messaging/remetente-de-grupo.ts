@@ -4,12 +4,13 @@ import { z } from "zod";
  * Remetente de uma mensagem de GRUPO (`messages.metadata.group_sender`): nome, telefone e
  * lid de um participante, que não é contato do CRM.
  *
- * LGPD — DECISÃO DO DONO (revisão final, 23/09/2026): este rótulo fica FORA da exportação
- * e da anonimização LGPD (`fn_lgpd_cascade_redact_contact`, `lib/lgpd/export-collector.ts`),
- * que alcançam só o contato do grupo. É dado de uso interno, e o dado sensível é tratado
- * sob a responsabilidade do dono da operação. Registrado na spec
+ * LGPD — FORA DA CASCATA DE PROPÓSITO (revisão final, 23/09/2026): este rótulo fica fora
+ * da exportação e da anonimização LGPD (`fn_lgpd_cascade_redact_contact`,
+ * `lib/lgpd/export-collector.ts`), que alcançam só o contato do grupo. O participante não
+ * é contato do CRM e não há chave confiável para achá-lo por titular; o rótulo é de uso
+ * interno do atendimento, sob a responsabilidade do controlador. Racional na spec
  * (docs/superpowers/specs/2026-09-23-grupos-na-inbox-design.md, "Fora desta versão").
- * Não "completar" a cascata sem nova decisão do dono.
+ * Estender a cascata a este campo é mudança de desenho, não "completar" um esquecimento.
  */
 export const remetenteDeGrupoSchema = z.strictObject({
   name: z.string().min(1).max(200).nullable(),
