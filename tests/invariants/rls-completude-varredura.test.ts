@@ -278,7 +278,7 @@ const PROVA_PROPRIA: readonly Excecao[] = [
       "(RLS), membro só LÊ e só o service role escreve\") — membros da " +
       "organização de teste leem, manager/agent/anon são recusados na escrita " +
       "(sem grant nem policy de escrita), service role grava, e a leitura por " +
-      "JWT devolve 0 linhas da outra organização. Migration 0388.",
+      "JWT devolve 0 linhas da outra organização. Migration 0411.",
   },
 ];
 

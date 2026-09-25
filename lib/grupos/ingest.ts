@@ -3,7 +3,7 @@
  *
  * O que esta entrada NÃO faz, de propósito: `aplicarEfeitosPosEntrada` (opt-out, lead,
  * atribuição), `acelerarPipelineDeEventos` e o audit `message.received`. O banco emite
- * `message.group_received` para conversa de grupo (migration 0388), e nenhum
+ * `message.group_received` para conversa de grupo (migration 0411), e nenhum
  * consumidor de `message.received` — IA, follow-up, campanhas, automações — a vê.
  *
  * Quem chama é a entrada do canal (o ingest do transporte, em `lib/`): ela lê o payload do

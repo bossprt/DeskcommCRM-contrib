@@ -45,7 +45,7 @@ create table if not exists public.channel_session_groups (
 );
 alter table public.channel_session_groups enable row level security;
 
--- Só o service role ESCREVE (decisão do dono, revisão final): o único escritor
+-- Só o service role ESCREVE (decidido na revisão final): o único escritor
 -- legítimo é a API (`lib/grupos/servico.ts`), que confirma o filtro do WhatsApp
 -- antes de gravar e audita. Uma policy de escrita para gerente deixava o
 -- PostgREST ligar grupo sem filtro e sem auditoria, ou apontar
@@ -82,7 +82,7 @@ declare c public.conversations;
 begin
  select * into c from public.conversations where organization_id=p_org and id=p_conversation;
  if not found or c.assigned_to_user_id is not null or c.status not in('open','pending','claimed','ai_handling') then return;end if;
- if c.is_group then return; end if; -- grupos: nunca roteados (migration 0388)
+ if c.is_group then return; end if; -- grupos: nunca roteados (migration 0411)
  insert into public.event_log(organization_id,event_type,entity_kind,entity_id,payload)
  values(p_org,'conversation.routing_requested','conversation',c.id,
   jsonb_build_object('organization_id',p_org,'conversation_id',c.id,'channel_session_id',c.channel_session_id))
@@ -653,7 +653,7 @@ begin
   -- channel_session_groups.subject — o NOME do grupo, e a FK contact_id aponta
   -- para o placeholder do grupo (contacts.kind = 'whatsapp_group'), nunca para
   -- o titular real sendo anonimizado neste caminho — mas a FK para contacts e o
-  -- nome da coluna casam o padrão automático do escopo (migration 0388), e
+  -- nome da coluna casam o padrão automático do escopo (migration 0411), e
   -- nulificar não perde nada operacional: número, conversa e liga/desliga ficam.
   update public.channel_session_groups set
     subject = null
@@ -728,26 +728,42 @@ as $fn_comando$
 $fn_comando$;
 
 comment on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean)
-  is 'Quem manda na conversa. Espelho SQL de comandoDaConversa() (lib/inbox/comando-da-conversa.ts); as duas são casadas por tests/invariants/comando-da-conversa-espelha-o-ts.test.ts. Grupo sem dono é aguardando (migration 0388).';
+  is 'Quem manda na conversa. Espelho SQL de comandoDaConversa() (lib/inbox/comando-da-conversa.ts); as duas são casadas por tests/invariants/comando-da-conversa-espelha-o-ts.test.ts. Grupo sem dono é aguardando (migration 0411).';
 
-create or replace function public.comando_da_conversa(c public.conversations)
+-- `comando_da_conversa` segue a forma da 0404 (issue #1571, upstream):
+-- SECURITY DEFINER para a contagem das abas não reavaliar a RLS de `contacts`
+-- por conversa, parâmetro SEM NOME para a PostgREST não publicá-la em `/rpc`, e
+-- as subconsultas presas a `ct.organization_id = $1.organization_id`. O que esta
+-- migration acrescenta é só o sétimo argumento, `$1.is_group`. Este bloco vem
+-- DEPOIS do da 0404 de propósito: é a última definição que vale, e ela tem de
+-- carregar as duas decisões. DROP sem `cascade`, como na 0404 (nada depende
+-- dela); o DROP leva a ACL, então as duas origens de EXECUTE voltam explícitas.
+drop function if exists public.comando_da_conversa(public.conversations);
+
+create function public.comando_da_conversa(public.conversations)
 returns text
 language sql
 stable
+security definer
 set search_path = public
 as $comando$
   select public.fn_comando_da_conversa(
-    c.status,
-    c.assigned_to_user_id,
-    c.bot_silenced_until,
-    coalesce((select ct.force_human from public.contacts ct where ct.id = c.contact_id), false),
-    coalesce((select ct.is_blocked  from public.contacts ct where ct.id = c.contact_id), false),
+    $1.status,
+    $1.assigned_to_user_id,
+    $1.bot_silenced_until,
+    coalesce((select ct.force_human from public.contacts ct where ct.id = $1.contact_id and ct.organization_id = $1.organization_id), false),
+    coalesce((select ct.is_blocked  from public.contacts ct where ct.id = $1.contact_id and ct.organization_id = $1.organization_id), false),
     now(),
-    coalesce(c.is_group, false)
+    coalesce($1.is_group, false)
   );
 $comando$;
+
+comment on function public.comando_da_conversa(public.conversations)
+  is 'Campo calculado exposto pelo PostgREST: ?select=comando_da_conversa e ?comando_da_conversa=in.(...). Resolve o contato e carimba now(); a regra em si é fn_comando_da_conversa. SECURITY DEFINER desde a 0404 (issue #1571: a contagem das abas reavaliava a RLS de contacts 2x por conversa); parâmetro SEM NOME de propósito — com nome a PostgREST a exporia em /rpc, e ali uma linha fabricada leria force_human/is_blocked de outro tenant. Passa is_group desde a 0411 (grupos de WhatsApp na inbox).';
 
 revoke execute on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean) from public, anon;
 revoke execute on function public.comando_da_conversa(public.conversations) from public, anon;
 grant  execute on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean) to authenticated, service_role;
 grant  execute on function public.comando_da_conversa(public.conversations) to authenticated, service_role;
+
+notify pgrst, 'reload schema';

@@ -118,7 +118,7 @@ describe("comando da conversa: o banco espelha o TypeScript", () => {
                   bot_silenced_until: silencio,
                   force_human: fh,
                   is_blocked: ib,
-                  // Grupo (migration 0388): sem dono é sempre 'aguardando'.
+                  // Grupo (migration 0411): sem dono é sempre 'aguardando'.
                   is_group: gr,
                   // `true` de propósito: o banco não sabe deste fato org-wide
                   // (seria `agenteAtende` numa terceira encarnação), e com ele
@@ -180,7 +180,7 @@ describe("comando da conversa: o banco espelha o TypeScript", () => {
       { n: 6, status: "closed", dono: null, sil: null, fh: false, ib: false },
       { n: 7, status: "pending", dono: null, sil: null, fh: false, ib: false },
       { n: 8, status: "resolved", dono: null, sil: null, fh: false, ib: false },
-      // Grupo (migration 0388): o wrapper tem de passar `c.is_group` — sem dono,
+      // Grupo (migration 0411): o wrapper tem de passar `c.is_group` — sem dono,
       // 'aguardando'; com dono, 'humano'; fechado, 'encerrada'.
       { n: 9, status: "open", dono: null, sil: null, fh: false, ib: false, grupo: true },
       { n: 10, status: "open", dono: DONO, sil: null, fh: false, ib: false, grupo: true },
