@@ -177,12 +177,27 @@ Evidência em `.superpowers/evidence/`.
 **Fora desta versão:** histórico anterior ao ligar; lista de atendentes por grupo (a
 saída 2, que mexe em `fn_can_view_conversation`); moderação, membros e criar ou sair de
 grupo (o escopo da #1428); grupos em canais `limited`; **exportação e anonimização LGPD
-de `messages.metadata.group_sender`** (nome/telefone/lid de participantes). Racional: o rótulo
-do remetente é de uso interno do atendimento (mostrar quem mandou cada mensagem), o
-participante não é contato do CRM e não há chave confiável para achá-lo por titular; o
-dado fica sob a responsabilidade do controlador, que opera o número. A cascata LGPD
-alcança só o contato do grupo. Estender a cascata a `group_sender` é trabalho futuro
-explícito, não esquecimento.
+do participante de grupo que NÃO é contato do CRM** (ver abaixo).
+
+**LGPD — mensagens de grupo.** A mensagem de grupo mora na conversa do contato
+PLACEHOLDER do grupo, e o autor só existe em `messages.metadata.group_sender`
+(`{name, phone, lid}`). Para quem **já é contato do CRM**, a anonimização alcança essas
+mensagens: o gatilho da virada de `is_anonymized` (`fn_redigir_conversas_ao_anonimizar`,
+migration 0391, redefinido na 0411) — por onde passam os DOIS caminhos, o pedido formal
+(`fn_lgpd_cascade_redact_contact`) e o botão da ficha — casa o autor pelo telefone
+(`fn_telefone_variantes`, com e sem o nono dígito) **ou** pelo lid (`contacts.wa_lid`),
+lidos da linha ANTIGA do contato, e redige corpo, mídia (o arquivo entra em
+`storage_redaction_queue` antes de a coluna ser zerada) e `metadata` — `group_sender`
+inclusive —, preservando os timestamps, e zera a prévia da conversa do grupo. O export
+(`lib/lgpd/export-collector.ts`) entrega as mesmas mensagens em
+`group_messages_authored`, no `data.json` e numa seção própria do PDF. Vigiado por
+`tests/invariants/lgpd-alcanca-mensagens-de-grupo-do-contato.test.ts`.
+
+**O participante que não é contato continua sem caminho.** Ele não tem ficha nem pedido
+LGPD por esta tela, e achá-lo exigiria buscar por telefone/lid solto, fora de um titular —
+mudança de desenho, não esquecimento. O rótulo fica sob a responsabilidade do
+controlador, que opera o número; se o participante virar contato depois, a cascata o
+alcança a partir daí (o casamento é no momento do pedido, não no da mensagem).
 
 **Reversão:** desligar todos os grupos devolve o número ao estado atual (`ignore.groups =
 true`). O histórico gravado fica guardado; apagá-lo é outra decisão, deliberada.

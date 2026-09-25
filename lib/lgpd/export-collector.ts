@@ -11,6 +11,7 @@ import { citacaoDaLei, perfilDoPais } from "@/lib/legal/perfil-do-pais";
 import { logger } from "@/lib/logger";
 import { camposLegiveis, perguntasDosGrafos, type CampoLegivel } from "@/lib/lgpd/campos-personalizados";
 import { maskPhone } from "@/lib/lgpd/mask";
+import { phoneLookupVariants } from "@/lib/channels/phone-variants";
 import type { Json } from "@/lib/database.types";
 
 // ---------------------------------------------------------------------------
@@ -566,6 +567,15 @@ export interface ExportPayload {
    * export novo NÃO COMPILAR se esquecer.
    */
   channel_session_groups: ChannelSessionGroupRow[];
+  /**
+   * Mensagens que o titular escreveu em GRUPOS de WhatsApp (migration 0411).
+   * Moram na conversa do placeholder do grupo, não na dele, então
+   * `messages_recent` não as vê. Casadas pelo autor em `metadata.group_sender`
+   * — telefone (grafias com e sem o nono dígito) ou lid (`contacts.wa_lid`) —,
+   * a mesma chave que a anonimização usa em `fn_redigir_conversas_ao_anonimizar`.
+   * Só alcança quem JÁ É contato: o participante sem ficha não tem titular.
+   */
+  group_messages_authored: MessageRow[];
   reply_drafts?: Array<{
     id: string;
     status: string;
@@ -691,11 +701,12 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
   // Contact snapshot (PII intentionally retained — this report is the data
   // owner's right of access; only logs/metadata stay sanitized).
   let contact: ContactSnapshot | null = null;
+  let contactLid: string | null = null;
   if (contactId) {
     const { data, error } = await admin
       .from("contacts")
       .select(
-        "id, name, display_name, email, phone_number, cpf_encrypted, birthdate, is_blocked, is_anonymized, consent, tags, source, source_metadata, custom_fields, created_at, last_activity_at, first_service_at",
+        "id, name, display_name, email, phone_number, wa_lid, cpf_encrypted, birthdate, is_blocked, is_anonymized, consent, tags, source, source_metadata, custom_fields, created_at, last_activity_at, first_service_at",
       )
       .eq("organization_id", organizationId)
       .eq("id", contactId)
@@ -744,6 +755,7 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
         });
       }
       const legiveis = camposLegiveis(customFields, perguntasDosGrafos(grafos));
+      contactLid = data.wa_lid ?? null;
       contact = {
         id: data.id,
         name: data.name ?? null,
@@ -1130,6 +1142,47 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
       channel_session_groups = data;
     }
   }
+
+  // Mensagens de grupo escritas pelo titular — ver `group_messages_authored`.
+  // Duas consultas (telefone, lid) em vez de um `or` sobre caminho JSON: cada
+  // uma é um filtro simples, e a união por id desfaz a mensagem que casa as duas.
+  const porId = new Map<string, MessageRow>();
+  const telefones = contact?.phone_number ? phoneLookupVariants(contact.phone_number) : [];
+  const buscas = [
+    telefones.length > 0 ? { campo: "metadata->group_sender->>phone", valores: telefones } : null,
+    contactLid ? { campo: "metadata->group_sender->>lid", valores: [contactLid] } : null,
+  ];
+  for (const busca of buscas) {
+    if (!busca) continue;
+    const { data, error } = await admin
+      .from("messages")
+      .select("id, conversation_id, direction, type, status, body, media_url, sent_at, created_at")
+      .eq("organization_id", organizationId)
+      .in(busca.campo, busca.valores)
+      .order("created_at", { ascending: false })
+      .limit(RECENT_MESSAGES_LIMIT);
+    if (error) {
+      logger.warn("[lgpd-export-worker] group messages load failed", {
+        request_id: requestId,
+        error: error.message,
+      });
+      continue;
+    }
+    for (const m of data ?? []) {
+      porId.set(m.id, {
+        id: m.id,
+        conversation_id: m.conversation_id,
+        direction: m.direction,
+        type: m.type,
+        status: m.status,
+        body: m.body,
+        has_media: Boolean(m.media_url),
+        sent_at: m.sent_at,
+        created_at: m.created_at,
+      });
+    }
+  }
+  const group_messages_authored = [...porId.values()].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   // Captação por webhook — a MESMA classe do bloco acima, achada pelo gate.
   let webhook_captures: CaptureRow[] = [];
@@ -1526,6 +1579,7 @@ export async function collectExportData(args: CollectArgs): Promise<ExportPayloa
     campaign_recipients,
     campaign_suppressions,
     channel_session_groups,
+    group_messages_authored,
   };
 }
 
@@ -1571,5 +1625,6 @@ function emptyPayload(
     campaign_recipients: [],
     campaign_suppressions: [],
     channel_session_groups: [],
+    group_messages_authored: [],
   };
 }

@@ -766,4 +766,138 @@ revoke execute on function public.comando_da_conversa(public.conversations) from
 grant  execute on function public.fn_comando_da_conversa(text, uuid, timestamptz, boolean, boolean, timestamptz, boolean) to authenticated, service_role;
 grant  execute on function public.comando_da_conversa(public.conversations) to authenticated, service_role;
 
+-- 7. LGPD alcança as mensagens de GRUPO escritas por quem JÁ É contato do CRM.
+--
+-- A mensagem de grupo mora na conversa do contato PLACEHOLDER do grupo, não na
+-- do titular: o autor só existe em `messages.metadata.group_sender`
+-- ({name, phone, lid}). Sem este passo, anonimizar alguém deixava tudo o que
+-- ele escreveu nos grupos ligados — corpo, mídia e o próprio rótulo com nome e
+-- telefone — intacto.
+--
+-- O passo mora no GATILHO da virada de `is_anonymized` (migration 0391), e não
+-- em `fn_lgpd_cascade_redact_contact`, pela mesma razão que trouxe o gatilho:
+-- os DOIS caminhos (o pedido formal e o botão da ficha) passam por ele. O
+-- casamento é pelo telefone (`fn_telefone_variantes`, com e sem o nono dígito)
+-- OU pelo lid (`contacts.wa_lid`), lidos de OLD: os dois caminhos zeram
+-- `phone_number` no MESMO update que vira `is_anonymized`, e a cascata formal
+-- zera também `source_metadata`, de onde o lid é GERADO. Ler de NEW não
+-- alcançaria linha nenhuma — e pareceria feito.
+--
+-- ⚠️ Só alcança quem JÁ É contato do CRM. O participante de grupo que nunca
+-- virou contato não tem ficha, não tem pedido LGPD e não tem caminho por aqui:
+-- achá-lo exigiria buscar por telefone/lid solto, fora de um titular — mudança
+-- de desenho, não esquecimento. Ver a spec, "LGPD — mensagens de grupo".
+--
+-- Sem cura retroativa, de propósito: mensagem de grupo só existe a partir desta
+-- migration, e o gatilho nasce junto com ela.
+--
+-- ponytail: varredura sem índice sobre as mensagens de grupo da org; um índice
+-- de expressão em (metadata->'group_sender'->>'phone') resolve se anonimizar
+-- ficar lento em org com muito grupo.
+create or replace function public.fn_redigir_conversas_ao_anonimizar()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_variantes text[];
+  v_lid text;
+  v_msgs_de_grupo uuid[];
+begin
+  insert into public.storage_redaction_queue (organization_id, bucket, object_path)
+  select distinct new.organization_id, 'whatsapp-media', m.media_storage_path
+    from public.messages m
+   where m.organization_id = new.organization_id
+     and m.conversation_id in (
+       select c.id from public.conversations c
+        where c.contact_id = new.id and c.organization_id = new.organization_id)
+     and m.media_storage_path is not null
+     and length(m.media_storage_path) > 0
+  on conflict (bucket, object_path) do nothing;
+
+  update public.messages set
+    body = '[mensagem anonimizada]',
+    media_url = null,
+    media_mime = null,
+    media_size_bytes = null,
+    media_storage_path = null,
+    metadata = '{}'::jsonb,
+    updated_at = now()
+  where organization_id = new.organization_id
+    and conversation_id in (
+      select c.id from public.conversations c
+       where c.contact_id = new.id and c.organization_id = new.organization_id);
+
+  update public.conversations set
+    metadata = '{}'::jsonb,
+    last_message_preview = null,
+    last_handoff_reason = null,
+    updated_at = now()
+  where contact_id = new.id and organization_id = new.organization_id;
+
+  update public.lead_checkpoints set
+    rolling_summary = '[resumo anonimizado]',
+    commitments = '[]'::jsonb,
+    objections = '[]'::jsonb,
+    next_action = null,
+    declaracao = null
+  where contact_id = new.id and organization_id = new.organization_id;
+
+  -- Mensagens de grupo escritas pelo titular (ver o cabeçalho deste bloco).
+  v_variantes := coalesce(public.fn_telefone_variantes(coalesce(old.phone_number, new.phone_number)), '{}');
+  v_lid := coalesce(old.wa_lid, new.wa_lid);
+
+  select coalesce(array_agg(m.id), '{}')
+    into v_msgs_de_grupo
+    from public.messages m
+   where m.organization_id = new.organization_id
+     and m.metadata ? 'group_sender'
+     and (
+       regexp_replace(coalesce(m.metadata->'group_sender'->>'phone', ''), '\D', '', 'g') = any(v_variantes)
+       or (v_lid is not null and m.metadata->'group_sender'->>'lid' = v_lid)
+     );
+
+  if cardinality(v_msgs_de_grupo) > 0 then
+    -- Mídia ANTES de zerar a coluna, pelo mesmo motivo do começo da função.
+    insert into public.storage_redaction_queue (organization_id, bucket, object_path)
+    select distinct new.organization_id, 'whatsapp-media', m.media_storage_path
+      from public.messages m
+     where m.organization_id = new.organization_id
+       and m.id = any(v_msgs_de_grupo)
+       and m.media_storage_path is not null
+       and length(m.media_storage_path) > 0
+    on conflict (bucket, object_path) do nothing;
+
+    -- A prévia da conversa do GRUPO pode ser o texto do titular: sai junto. As
+    -- mensagens dos outros participantes ficam; a próxima que chegar a repõe.
+    update public.conversations set
+      last_message_preview = null,
+      updated_at = now()
+    where organization_id = new.organization_id
+      and id in (select m.conversation_id from public.messages m
+                  where m.organization_id = new.organization_id and m.id = any(v_msgs_de_grupo));
+
+    update public.messages set
+      body = '[mensagem anonimizada]',
+      media_url = null,
+      media_mime = null,
+      media_size_bytes = null,
+      media_storage_path = null,
+      metadata = '{}'::jsonb,
+      updated_at = now()
+    where organization_id = new.organization_id
+      and id = any(v_msgs_de_grupo);
+  end if;
+
+  return new;
+end
+$$;
+
+-- As DUAS origens de EXECUTE (item 9 do CLAUDE.md), repetidas: `create or
+-- replace` preserva a ACL, mas quem lê este bloco não precisa confiar nisso.
+revoke all on function public.fn_redigir_conversas_ao_anonimizar() from public;
+revoke execute on function public.fn_redigir_conversas_ao_anonimizar() from anon;
+revoke execute on function public.fn_redigir_conversas_ao_anonimizar() from authenticated;
+
 notify pgrst, 'reload schema';
